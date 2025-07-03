@@ -9,6 +9,11 @@ scripts/run_*_remote.py
 wandb/
 tests/images/
 toddlerbot/policies/checkpoints/*dp.pth
+experimental/
+toddlerbot/depth/models/
+*.engine
+*.onnx
+*.mp4
 
 ### Python ###
 

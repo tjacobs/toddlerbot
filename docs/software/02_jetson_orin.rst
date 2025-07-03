@@ -17,7 +17,9 @@ Flash the System
 
    .. image:: ../_static/jetson_flash_pins.png
 
-   - Click on JP6.0 tab and download the image corresponding to Jetson Orin NX 16GB. The download link may be slow—it took us about an hour to download the image.
+   - Click on JP6.1 tab and download the image corresponding to Jetson Orin NX 16GB. The download link may be slow—it took us about an hour to download the image.
+   .. note::
+      JetPack 6.1 or newer is strongly recommended, as it includes TensorRT 10.3+, which significantly improves engine build time and inference speed. We only support TensorRT 10+ for stereo depth estimation.
 
 #. After flashing, unplug the powercable, the USB-C cable and the jumper wire. Replug the power cable, the HDMI cable, the keyboard and the mouse.
    The system should boot up now. The start screen should look like this:
@@ -76,10 +78,19 @@ Additional Packages
 #. Go through the steps in :ref:`setup`. Note that ``wget`` is handy for downloading the Miniforge installer from the terminal.
 
 
-#. For Jetson, you need to follow the information on `this page <https://forums.developer.nvidia.com/t/pytorch-for-jetson/72048>`__
-   to install ``torch`` and ``torchvision``. Please do **NOT** install ``numpy`` when installing ``torch`` as it will install ``numpy 2.x`` and cause conflicts. 
-   For reference, we downloaded `the wheel file for PyTorch v2.3.0 with JetPack 6.0 (L4T R36.2 / R36.3) + CUDA 12.2 <https://nvidia.box.com/shared/static/mp164asf3sceb570wvjsrezk1p4ftj8t.whl>`__.
+#. Install ``torch`` and ``torchvision``.
 
+   .. tabs::
+
+      .. group-tab:: JetPack 6.1 and above
+
+         Follow the information on `this page <https://developer.nvidia.com/embedded/downloads>`__ and search for ``PyTorch for Jetson``
+         to install ``torch``. For reference, we downloaded `the wheel file for PyTorch v2.5.0 with JetPack 6.1 (L4T R36.4) + CUDA 12.6 <https://seeedstudio88-my.sharepoint.com/:u:/g/personal/youjiang_yu_seeedstudio88_onmicrosoft_com/EWCZOBNb9C9AoZe-mt23jLABZk942Lf0yopVGFJFTeL5DA?e=o7epES>`__.
+
+      .. group-tab:: JetPack 6.0 and below
+
+         Follow the information on `this page <https://forums.developer.nvidia.com/t/pytorch-for-jetson/72048>`__
+         to install ``torch`` and ``torchvision``. For reference, we downloaded `the wheel file for PyTorch v2.3.0 with JetPack 6.0 (L4T R36.2 / R36.3) + CUDA 12.2 <https://nvidia.box.com/shared/static/mp164asf3sceb570wvjsrezk1p4ftj8t.whl>`__.
    We find that the ``--content-disposition`` option is useful for downloading the file with the correct name:
 
    .. code:: bash
@@ -91,7 +102,7 @@ Additional Packages
    .. code:: bash
 
       pip install <path/to/the/wheel>
-
+   Please do **NOT** install ``numpy`` when installing ``torch`` as it will install ``numpy 2.x`` and cause conflicts.
 
    Last but not least, run the following command to verify that ``jax`` and ``torch`` versions are compatible:
 
@@ -135,7 +146,7 @@ Additional Packages
 
       sudo apt install ntp ntpdate
       sudo systemctl enable ntp
-      
+
       sudo nano /etc/ntp.conf
 
       comment out the following lines:
@@ -163,3 +174,31 @@ Additional Packages
    .. code:: bash
 
       sudo apt install portaudio19-dev flac
+
+#. For stereo depth estimation using FoundationStereo + TensorRT:
+
+   **Prerequisites:** Ensure JetPack 6.1 or above is installed.
+
+   **Step 1:** Check your CUDA version and set up PyCUDA for GPU acceleration.
+
+   Check CUDA version:
+
+   .. code:: bash
+
+      cat /usr/local/cuda/version.json
+
+   Or check via ``jtop`` info tab. Then set up PyCUDA (replace ``12.6`` with your CUDA version):
+
+   .. code:: bash
+
+      export PATH=/usr/local/cuda-12.6/bin:$PATH
+      export CUDA_ROOT=/usr/local/cuda
+      pip install pycuda
+
+   **Step 2:** Configure TensorRT for the conda environment.
+
+   Add TensorRT to Python path:
+
+   .. code:: bash
+
+      echo "/usr/lib/python3.10/dist-packages" > $CONDA_PREFIX/lib/python3.10/site-packages/tensorrt_global.pth
