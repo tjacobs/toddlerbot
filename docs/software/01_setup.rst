@@ -3,8 +3,8 @@
 Setup
 ============
 
-This is the general software setup process with slight variations on different platforms. 
-For additional setup of specific platforms such as :ref:`jetson_orin`, ROG Ally X, and Steam Deck, 
+This is the general software setup process with slight variations on different platforms.
+For additional setup of specific platforms such as :ref:`jetson_orin`, ROG Ally X, and Steam Deck,
 please refer to the corresponding sections.
 
 Set up the Repo
@@ -20,7 +20,7 @@ Run the following commands to clone the repo:
    cd toddlerbot
    git submodule update --init --recursive
 
-Follow the steps on `this page <https://docs.github.com/en/authentication/connecting-to-github-with-ssh/generating-a-new-ssh-key-and-adding-it-to-the-ssh-agent>`_ 
+Follow the steps on `this page <https://docs.github.com/en/authentication/connecting-to-github-with-ssh/generating-a-new-ssh-key-and-adding-it-to-the-ssh-agent>`_
 to set up SSH keys for GitHub if needed.
 
 
@@ -94,6 +94,15 @@ Set up Conda Environment
          conda activate toddlerbot
          pip install -e toddlerbot/brax
          pip install -e ".[jetson]"
+
+      .. note::
+
+         For Jetson, if you run into issues installing ``pyaudio``, you can try the following commands:
+
+         .. code:: bash
+
+            sudo apt-get install -y portaudio19-dev python3-dev build-essential
+            pip install -e ".[jetson]"
 
    .. group-tab:: ROG Ally X
 
