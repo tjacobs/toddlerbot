@@ -1,20 +1,27 @@
+"""Model utilities for manipulation tasks.
+
+This module provides helper functions for vision encoders:
+- ResNet initialization
+- BatchNorm to GroupNorm conversion
+"""
+
 from typing import Callable
 
 import torch
 import torch.nn as nn
 import torchvision
 
-# ### **Vision Encoder**
-#
-# Defines helper functions:
-# - `get_resnet` to initialize standard ResNet vision encoder
-# - `replace_bn_with_gn` to replace all BatchNorm layers with GroupNorm
-
 
 def get_resnet(name: str, weights=None, **kwargs) -> nn.Module:
-    """
-    name: resnet18, resnet34, resnet50
-    weights: "IMAGENET1K_V1", None
+    """Get ResNet model with final layer removed.
+
+    Args:
+        name: ResNet variant (resnet18, resnet34, resnet50).
+        weights: Pre-trained weights ("IMAGENET1K_V1" or None).
+        **kwargs: Additional arguments for ResNet.
+
+    Returns:
+        ResNet model with identity final layer.
     """
     # Use standard ResNet implementation from torchvision
     func = getattr(torchvision.models, name)
@@ -31,12 +38,15 @@ def replace_submodules(
     predicate: Callable[[nn.Module], bool],
     func: Callable[[nn.Module], nn.Module],
 ) -> nn.Module:
-    """
-    Replace all submodules selected by the predicate with
-    the output of func.
+    """Replace all submodules matching a predicate.
 
-    predicate: Return true if the module is to be replaced.
-    func: Return new module to use.
+    Args:
+        root_module: Module to process.
+        predicate: Function returning True if module should be replaced.
+        func: Function returning replacement module.
+
+    Returns:
+        Modified root module.
     """
     if predicate(root_module):
         return func(root_module)
@@ -72,8 +82,14 @@ def replace_submodules(
 def replace_bn_with_gn(
     root_module: nn.Module, features_per_group: int = 16
 ) -> nn.Module:
-    """
-    Relace all BatchNorm layers with GroupNorm.
+    """Replace all BatchNorm layers with GroupNorm.
+
+    Args:
+        root_module: Module to process.
+        features_per_group: Features per group in GroupNorm.
+
+    Returns:
+        Modified module with GroupNorm layers.
     """
     replace_submodules(
         root_module=root_module,

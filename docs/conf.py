@@ -53,3 +53,6 @@ autodoc_default_options = {
     "special-members": False,
     "exclude-members": "staticMetaObject",
 }
+
+# Mock imports for modules that have system dependencies
+autodoc_mock_imports = ["pycuda", "pycuda.driver", "pycuda.gpuarray", "tensorrt"]

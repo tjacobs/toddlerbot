@@ -4,6 +4,22 @@ toddlerbot.locomotion package
 Submodules
 ----------
 
+toddlerbot.locomotion.cartwheel\_env module
+-------------------------------------------
+
+.. automodule:: toddlerbot.locomotion.cartwheel_env
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+toddlerbot.locomotion.crawl\_env module
+---------------------------------------
+
+.. automodule:: toddlerbot.locomotion.crawl_env
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 toddlerbot.locomotion.mjx\_config module
 ----------------------------------------
 
@@ -20,10 +36,26 @@ toddlerbot.locomotion.mjx\_env module
    :undoc-members:
    :show-inheritance:
 
+toddlerbot.locomotion.on\_policy\_runner module
+-----------------------------------------------
+
+.. automodule:: toddlerbot.locomotion.on_policy_runner
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 toddlerbot.locomotion.ppo\_config module
 ----------------------------------------
 
 .. automodule:: toddlerbot.locomotion.ppo_config
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+toddlerbot.locomotion.rsl\_rl\_wrapper module
+---------------------------------------------
+
+.. automodule:: toddlerbot.locomotion.rsl_rl_wrapper
    :members:
    :undoc-members:
    :show-inheritance:

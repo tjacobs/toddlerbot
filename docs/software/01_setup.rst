@@ -17,8 +17,6 @@ Run the following commands to clone the repo:
    mkdir ~/projects
    cd ~/projects
    git clone git@github.com:hshi74/toddlerbot.git
-   cd toddlerbot
-   git submodule update --init --recursive
 
 Follow the steps on `this page <https://docs.github.com/en/authentication/connecting-to-github-with-ssh/generating-a-new-ssh-key-and-adding-it-to-the-ssh-agent>`_
 to set up SSH keys for GitHub if needed.
@@ -54,7 +52,6 @@ Set up Conda Environment
 
          conda create --name toddlerbot python=3.10
          conda activate toddlerbot
-         pip install -e toddlerbot/brax
          pip install -e ".[linux]"
 
    .. group-tab:: Mac OSX (arm64)
@@ -64,7 +61,6 @@ Set up Conda Environment
          CONDA_SUBDIR=osx-arm64 conda create -n toddlerbot python=3.10
          conda activate toddlerbot
          conda config --env --set subdir osx-arm64
-         pip install -e toddlerbot/brax
          pip install -e ".[macos]"
 
    .. group-tab:: Mac OSX (x86_64)
@@ -74,7 +70,6 @@ Set up Conda Environment
          CONDA_SUBDIR=osx-64 conda create -n toddlerbot python=3.10
          conda activate toddlerbot
          conda config --env --set subdir osx-64
-         pip install -e toddlerbot/brax
          pip install -e ".[macos]"
 
    .. group-tab:: Windows
@@ -83,7 +78,6 @@ Set up Conda Environment
 
          conda create --name toddlerbot python=3.10
          conda activate toddlerbot
-         pip install -e toddlerbot/brax
          pip install -e ".[windows]"
 
    .. group-tab:: Jetson
@@ -92,7 +86,6 @@ Set up Conda Environment
 
          conda create --name toddlerbot python=3.10
          conda activate toddlerbot
-         pip install -e toddlerbot/brax
          pip install -e ".[jetson]"
 
       .. note::
@@ -110,7 +103,6 @@ Set up Conda Environment
 
          conda create --name toddlerbot python=3.10
          conda activate toddlerbot
-         pip install -e toddlerbot/brax
          pip install -e "."
 
    .. group-tab:: Steam Deck
@@ -119,5 +111,4 @@ Set up Conda Environment
 
          conda create --name toddlerbot python=3.10
          conda activate toddlerbot
-         pip install -e toddlerbot/brax
          pip install -e "."

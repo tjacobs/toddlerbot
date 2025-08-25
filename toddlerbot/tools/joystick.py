@@ -1,3 +1,10 @@
+"""Joystick controller interface supporting multiple gaming controllers.
+
+This module provides a unified interface for handling input from various gaming controllers
+including Xbox, Steam Deck, Google Stadia, and ROG Ally controllers. It maps controller
+inputs to robot walking commands and actions.
+"""
+
 import contextlib
 import os
 import platform
@@ -6,7 +13,7 @@ from typing import Dict
 
 import numpy as np
 
-from toddlerbot.locomotion.mjx_config import get_env_config
+from toddlerbot.locomotion.mjx_env import get_env_config
 
 os_type = platform.system()
 if os_type != "Windows":
@@ -180,7 +187,7 @@ class Joystick:
         self.dead_zone = dead_zone
         self.joystick = None
 
-        walk_cfg = get_env_config("walk")
+        walk_cfg, _ = get_env_config("walk")
         walk_command_range = walk_cfg.commands.command_range
         self.walk_x_range = np.array(
             [walk_command_range[5][1], 0.0, walk_command_range[5][0]]
@@ -195,7 +202,6 @@ class Joystick:
         joystick_count = pygame.joystick.get_count()
         if joystick_count == 0:
             raise ValueError("No joystick detected.")
-            return
 
         for i in range(joystick_count):
             joystick = pygame.joystick.Joystick(i)

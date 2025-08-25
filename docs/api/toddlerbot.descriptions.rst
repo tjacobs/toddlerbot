@@ -4,50 +4,34 @@ toddlerbot.descriptions package
 Submodules
 ----------
 
-toddlerbot.descriptions.add\_configs module
--------------------------------------------
-
-.. automodule:: toddlerbot.descriptions.add_configs
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-toddlerbot.descriptions.assemble\_urdf module
----------------------------------------------
-
-.. automodule:: toddlerbot.descriptions.assemble_urdf
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-toddlerbot.descriptions.get\_urdf module
-----------------------------------------
-
-.. automodule:: toddlerbot.descriptions.get_urdf
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-toddlerbot.descriptions.process\_mjcf module
+toddlerbot.descriptions.assemble\_xml module
 --------------------------------------------
 
-.. automodule:: toddlerbot.descriptions.process_mjcf
+.. automodule:: toddlerbot.descriptions.assemble_xml
    :members:
    :undoc-members:
    :show-inheritance:
 
-toddlerbot.descriptions.update\_collisions module
+toddlerbot.descriptions.convert\_to\_urdf module
+------------------------------------------------
+
+.. automodule:: toddlerbot.descriptions.convert_to_urdf
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+toddlerbot.descriptions.get\_xml module
+---------------------------------------
+
+.. automodule:: toddlerbot.descriptions.get_xml
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+toddlerbot.descriptions.onshape\_to\_robot module
 -------------------------------------------------
 
-.. automodule:: toddlerbot.descriptions.update_collisions
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-toddlerbot.descriptions.update\_onshape\_config module
-------------------------------------------------------
-
-.. automodule:: toddlerbot.descriptions.update_onshape_config
+.. automodule:: toddlerbot.descriptions.onshape_to_robot
    :members:
    :undoc-members:
    :show-inheritance:

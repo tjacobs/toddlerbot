@@ -1,13 +1,13 @@
+"""Camera feed test with dual fisheye cameras.
+
+This script captures video from two fisheye cameras, displays them side by side,
+and saves the combined video. Supports X11 forwarding for remote viewing.
+"""
+
 import cv2
 import numpy as np
 
 from toddlerbot.sensing.camera import Camera
-
-# This script captures video from the two fisheye cameras and displays them side by side in a single window.
-# It also saves the combined video to a file.
-
-# If you want to view the camera feed from the Jetson Orin through an ssh session, you can set up X11 forwarding
-# following this guide: https://www.businessnewsdaily.com/11035-how-to-use-x11-forwarding.html.
 
 if __name__ == "__main__":
     # Initialize two Camera instances with different camera IDs

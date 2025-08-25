@@ -1,33 +1,30 @@
+"""Diffusion model architecture for 1D temporal sequences.
+
+This module implements a 1D UNet architecture for noise prediction in diffusion models.
+
+Components:
+- SinusoidalPosEmb: Positional encoding for diffusion timesteps
+- Downsample1d/Upsample1d: Temporal resolution change layers
+- Conv1dBlock: Conv1d -> GroupNorm -> Mish activation
+- ConditionalResidualBlock1D: Residual block with FiLM conditioning
+"""
+
 import math
 from typing import Union
 
 import torch
 import torch.nn as nn
 
-# ### **Network**
-#
-# Defines a 1D UNet architecture `ConditionalUnet1D`
-# as the noies prediction network
-#
-# Components
-# - `SinusoidalPosEmb` Positional encoding for the diffusion iteration k
-# - `Downsample1d` Strided convolution to reduce temporal resolution
-# - `Upsample1d` Transposed convolution to increase temporal resolution
-# - `Conv1dBlock` Conv1d --> GroupNorm --> Mish
-# - `ConditionalResidualBlock1D` Takes two inputs `x` and `cond`. \
-# `x` is passed through 2 `Conv1dBlock` stacked together with residual connection.
-# `cond` is applied to `x` with [FiLM](https://arxiv.org/abs/1709.07871) conditioning.
-
-
-# This script defines the architecture for the diffusion model.
-
 
 class SinusoidalPosEmb(nn.Module):
+    """Sinusoidal positional embedding for diffusion timesteps."""
+
     def __init__(self, dim):
         super().__init__()
         self.dim = dim
 
     def forward(self, x):
+        """Generate sinusoidal positional embeddings."""
         device = x.device
         half_dim = self.dim // 2
         emb = math.log(10000) / (half_dim - 1)

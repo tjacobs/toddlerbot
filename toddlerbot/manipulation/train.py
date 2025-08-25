@@ -1,3 +1,5 @@
+"""Train diffusion policy models for robot manipulation tasks."""
+
 import argparse
 import os
 import time
@@ -332,7 +334,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--robot",
         type=str,
-        default="toddlerbot",
+        default="toddlerbot_2xc",
         help="The name of the robot. Need to match the name in descriptions.",
         choices=["toddlerbot", "toddlerbot_gripper"],
     )

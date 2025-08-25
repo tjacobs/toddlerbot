@@ -4,14 +4,25 @@ import numpy
 from tqdm import tqdm
 
 from toddlerbot.algorithms.zmp_planner import ZMPPlanner
+from toddlerbot.reference.motion_ref import Motion
+from toddlerbot.sim.mujoco_sim import MuJoCoSim
 from toddlerbot.sim.robot import Robot
-from toddlerbot.utils.array_utils import ArrayType, inplace_update, loop_update
+from toddlerbot.utils.array_utils import ArrayType, R, inplace_update, loop_update
 from toddlerbot.utils.array_utils import array_lib as np
-from toddlerbot.utils.math_utils import quat2euler
 
 
 class ZMPWalk:
-    """A class for generating ZMP-based walking trajectories for a robot."""
+    """ZMP-based walking trajectory generator for humanoid robots.
+
+    This class implements a Zero Moment Point (ZMP) based walking algorithm
+    that generates stable walking gaits for humanoid robots. It uses linear
+    model predictive control (MPC) to plan Center of Mass (CoM) trajectories
+    and generates corresponding joint trajectories for stable locomotion.
+
+    The algorithm supports various walking patterns including forward/backward
+    walking, sideways stepping, and turning, with configurable gait parameters
+    such as cycle time, step height, and single/double support ratios.
+    """
 
     def __init__(
         self,
@@ -43,27 +54,36 @@ class ZMPWalk:
         self.control_cost_Q = control_cost_Q
         self.control_cost_R = control_cost_R
 
-        default_joint_pos = np.array(
+        self.default_joint_pos = np.array(
             list(robot.default_joint_angles.values()), dtype=np.float32
         )
-        joint_groups = numpy.array(
-            [robot.joint_groups[name] for name in robot.joint_ordering]
-        )
-        self.default_leg_joint_pos = default_joint_pos[joint_groups == "leg"]
+        joint_groups = numpy.array(robot.joint_groups)
+        self.leg_joint_indices = np.where(joint_groups == "leg")[0]
+        self.default_leg_joint_pos = self.default_joint_pos[self.leg_joint_indices]
 
-        self.com_z = robot.config["general"]["offsets"]["default_torso_z"]
-        self.foot_to_com_x = float(robot.config["general"]["offsets"]["foot_to_com_x"])
-        self.foot_to_com_y = float(robot.config["general"]["offsets"]["foot_to_com_y"])
-
-        self.default_target_z = (
-            float(robot.config["general"]["offsets"]["torso_z"]) - self.com_z
+        self.foot_to_com_y = robot.config["robot"]["foot_to_com_y"]
+        self.hip_pitch_to_roll_z = robot.config["robot"]["hip_pitch_to_roll_z"]
+        self.hip_to_knee_z = robot.config["robot"]["hip_to_knee_z"]
+        self.knee_to_ank_z = robot.config["robot"]["knee_to_ankle_z"]
+        self.hip_to_ank_pitch = np.array(
+            [0, 0, self.robot.config["robot"]["hip_to_ankle_pitch_z"]], dtype=np.float32
         )
+        self.hip_to_ank_roll = np.array(
+            [0, 0, self.robot.config["robot"]["hip_to_ankle_roll_z"]], dtype=np.float32
+        )
+
+        self.com_z = (
+            robot.config["kinematics"]["zero_pos"][2]
+            + robot.config["kinematics"]["home_pos_z_delta"]
+        )
+        self.default_target_z = -robot.config["kinematics"]["home_pos_z_delta"]
         self.zmp_planner = ZMPPlanner()
 
     def build_lookup_table(
         self,
+        robot_suffix: str,
         command_range: List[List[float]] = [[-0.2, 0.4], [-0.2, 0.2], [-0.8, 0.8]],
-        interval: float = 0.02,
+        interval: float = 0.05,
     ):
         """Builds a lookup table for command references and associated data.
 
@@ -78,19 +98,16 @@ class ZMPWalk:
                 - A list of arrays for the leg joint position reference data.
                 - A list of arrays for the stance mask reference data.
         """
+        sim = MuJoCoSim(self.robot, fixed_base=True, vis_type="none")
+
         lookup_keys: List[Tuple[float, ...]] = []
-        com_ref_list: List[ArrayType] = []
-        stance_mask_ref_list: List[ArrayType] = []
-        leg_joint_pos_ref_list: List[ArrayType] = []
-        path_pos = np.zeros(3, dtype=np.float32)
-        path_quat = np.array([1, 0, 0, 0], dtype=np.float32)
+        motion_ref_list: List[Motion] = []
 
         # Create linspace arrays for each command range
         linspaces = [
             np.arange(start, stop + 1e-6, interval, dtype=np.float32)
             for start, stop in command_range
         ]
-
         # Generate all combinations of command values using meshgrid and then flatten
         command_xy_grid = np.meshgrid(*linspaces[:2], indexing="ij")
         command_xy = np.stack([g.flatten() for g in command_xy_grid], axis=-1)
@@ -102,31 +119,102 @@ class ZMPWalk:
         command_z = np.stack([zeros_z, zeros_z, linspaces[2]], axis=1)
         command_set = np.concatenate([command_set, command_z], axis=0)
 
+        right_hip_roll_idx = self.robot.joint_ordering.index("right_hip_roll")
+        right_hip_roll_rel_index = np.where(
+            self.leg_joint_indices == right_hip_roll_idx
+        )[0][0]
+
         for command in tqdm(command_set, desc="Building Lookup Table"):
             # if np.linalg.norm(command) < 1e-6:
             #     continue
-
-            _, com_ref, leg_joint_pos_ref, stance_mask_ref = self.plan(
-                path_pos, path_quat, command
+            _, _, leg_joint_pos_ref, stance_mask_ref = self.plan(
+                np.zeros(3, dtype=np.float32),
+                np.array([1, 0, 0, 0], dtype=np.float32),
+                command,
+                22,  # Plan for 22 seconds
             )
-            first_cycle_idx = int(np.ceil(self.cycle_time / self.control_dt))
-            com_ref_truncated = com_ref[first_cycle_idx:]
-            leg_joint_pos_ref_truncated = leg_joint_pos_ref[first_cycle_idx:]
-            stance_mask_ref_truncated = stance_mask_ref[first_cycle_idx:]
-
+            trunc_len = int(np.ceil(self.cycle_time / self.control_dt))
+            leg_joint_pos_ref_truncated = leg_joint_pos_ref[trunc_len:]
+            stance_mask_ref_truncated = stance_mask_ref[trunc_len:]
+            if robot_suffix == "_2xc":
+                leg_joint_pos_ref_truncated[:, right_hip_roll_rel_index] *= -1
+            motion_data = self.mujoco_replay(
+                sim, leg_joint_pos_ref_truncated, stance_mask_ref_truncated
+            )
             lookup_keys.append(tuple(map(float, command)))
-            com_ref_list.append(com_ref_truncated)
-            leg_joint_pos_ref_list.append(leg_joint_pos_ref_truncated)
-            stance_mask_ref_list.append(stance_mask_ref_truncated)
+            motion_ref_list.append(motion_data)
 
-        return lookup_keys, com_ref_list, leg_joint_pos_ref_list, stance_mask_ref_list
+        sim.close()
+
+        return lookup_keys, motion_ref_list
+
+    def mujoco_replay(
+        self,
+        sim: MuJoCoSim,
+        leg_joint_pos_ref: List[ArrayType],
+        stance_mask_ref: List[ArrayType],
+    ) -> dict:
+        time_replay = []
+        qpos_replay = []
+        body_pos_replay = []
+        body_quat_replay = []
+        body_lin_vel_replay = []
+        body_ang_vel_replay = []
+        site_pos_replay = []
+        site_quat_replay = []
+
+        t = 0.0
+        for leg_joint_pos in leg_joint_pos_ref:
+            joint_pos_curr = self.default_joint_pos.copy()
+            joint_pos_curr[self.leg_joint_indices] = leg_joint_pos
+            sim.set_joint_angles(joint_pos_curr)
+            sim.forward()
+            time_replay.append(t)
+            qpos_replay.append(np.array(sim.data.qpos, dtype=np.float32))
+            body_pos_replay.append(np.array(sim.data.xpos, dtype=np.float32))
+            body_quat_replay.append(np.array(sim.data.xquat, dtype=np.float32))
+            body_lin_vel_replay.append(np.array(sim.data.cvel[:, 3:], dtype=np.float32))
+            body_ang_vel_replay.append(np.array(sim.data.cvel[:, :3], dtype=np.float32))
+
+            site_pos_list = []
+            site_quat_list = []
+            for side in ["left", "right"]:
+                for ee_name in ["hand", "foot"]:
+                    ee_pos = sim.data.site(f"{side}_{ee_name}_center").xpos.copy()
+                    ee_mat = sim.data.site(f"{side}_{ee_name}_center").xmat.reshape(
+                        3, 3
+                    )
+                    ee_quat_xyzw = R.from_matrix(ee_mat).as_quat()
+                    ee_quat = np.concatenate(
+                        [ee_quat_xyzw[3:], ee_quat_xyzw[:3]], axis=-1
+                    )
+                    site_pos_list.append(ee_pos)
+                    site_quat_list.append(ee_quat)
+
+            site_pos_replay.append(np.array(site_pos_list, dtype=np.float32))
+            site_quat_replay.append(np.array(site_quat_list, dtype=np.float32))
+            t += self.control_dt
+
+        motion_data = dict(
+            time=np.array(time_replay, dtype=np.float32),
+            qpos=np.array(qpos_replay, dtype=np.float32),
+            body_pos=np.array(body_pos_replay, dtype=np.float32),
+            body_quat=np.array(body_quat_replay, dtype=np.float32),
+            body_lin_vel=np.array(body_lin_vel_replay, dtype=np.float32),
+            body_ang_vel=np.array(body_ang_vel_replay, dtype=np.float32),
+            site_pos=np.array(site_pos_replay, dtype=np.float32),
+            site_quat=np.array(site_quat_replay, dtype=np.float32),
+            contact=np.array(stance_mask_ref, dtype=np.float32),
+        )
+
+        return motion_data
 
     def plan(
         self,
         path_pos: ArrayType,
         path_quat: ArrayType,
         command: ArrayType,
-        total_time: float = 20.0,
+        total_time: float,
         rotation_radius: float = 0.1,
     ) -> Tuple[ArrayType, ArrayType, ArrayType, ArrayType]:
         """Plans the trajectory for a bipedal robot's movement based on the given path and command.
@@ -145,7 +233,8 @@ class ZMPWalk:
                 - The reference positions for leg joints as an array.
                 - The stance mask reference indicating foot contact states as an array.
         """
-        path_euler = quat2euler(path_quat)
+        path_quat_xyzw = np.concatenate([path_quat[1:], path_quat[:1]], axis=-1)
+        path_euler = R.from_quat(path_quat_xyzw).as_euler("xyz")
         pose_curr = np.array(
             [path_pos[0], path_pos[1], path_euler[2]], dtype=np.float32
         )
@@ -296,10 +385,7 @@ class ZMPWalk:
                 right_foot_ori_traj,
                 torso_ori_traj,
                 stance_mask_ref,
-            ) = self.compute_foot_trajectories(
-                time_steps,
-                np.repeat(np.stack(footsteps), 2, axis=0),
-            )
+            ) = self.compute_foot_trajectories(time_steps, footsteps)
 
             com_pose_traj = np.concatenate(
                 [x_traj[:, :2], torso_ori_traj[:, 2:]],
@@ -335,9 +421,9 @@ class ZMPWalk:
         )
         last_pos = np.concatenate(
             [
-                footsteps[0][:2] + offset,
+                footsteps[0][:2],
                 np.zeros(1, dtype=np.float32),
-                footsteps[0][:2] - offset,
+                footsteps[0][:2] - 2 * offset,
                 np.zeros(1, dtype=np.float32),
             ]
         )
@@ -367,43 +453,28 @@ class ZMPWalk:
                 foot_ori_traj = np.tile(last_ori, (num_steps, 1))
                 base_ori_traj = np.tile(last_base_ori, (num_steps, 1))
             else:
-                support_leg_curr = int(footsteps[i][-1])
-                support_leg_next = int(footsteps[i + 1][-1])
-                if support_leg_curr == 2:
-                    current_pos = last_pos.copy()
-                    current_ori = last_ori.copy()
-                    swing_leg = support_leg_next
-                else:
-                    current_pos = inplace_update(
-                        last_pos,
-                        slice(support_leg_curr * 3, support_leg_curr * 3 + 2),
-                        footsteps[i][:2],
-                    )
-                    current_ori = inplace_update(
-                        last_ori,
-                        support_leg_curr * 3 + 2,
-                        footsteps[i][2],
-                    )
-                    swing_leg = 1 - support_leg_curr
-
-                if support_leg_next == 2:
-                    offset = np.array(
-                        [
-                            -np.sin(footsteps[i][2]) * self.foot_to_com_y,
-                            np.cos(footsteps[i][2]) * self.foot_to_com_y,
-                        ]
-                    ) * (-1 if support_leg_curr == 1 else 1)
-                else:
-                    offset = np.zeros(2, dtype=np.float32)
-
-                target_pos = inplace_update(
+                fs_curr = footsteps[(i - 1) // 2]
+                fs_next = footsteps[(i + 1) // 2]
+                support_leg_curr = int(fs_curr[-1])
+                current_pos = last_pos.copy()
+                current_ori = last_ori.copy()
+                current_pos = inplace_update(
                     current_pos,
-                    slice(swing_leg * 3, swing_leg * 3 + 2),
-                    footsteps[i + 1][:2] + offset,
+                    slice(support_leg_curr * 3, support_leg_curr * 3 + 2),
+                    fs_curr[:2],
                 )
-                target_ori = inplace_update(
-                    current_ori, swing_leg * 3 + 2, footsteps[i + 1][2]
+                current_ori = inplace_update(
+                    current_ori, support_leg_curr * 3 + 2, fs_curr[2]
                 )
+                swing_leg = 1 - support_leg_curr
+
+                target_pos = current_pos.copy()
+                target_pos = inplace_update(
+                    target_pos, slice(swing_leg * 3, swing_leg * 3 + 2), fs_next[:2]
+                )
+                target_ori = current_ori.copy()
+                target_ori = inplace_update(target_ori, swing_leg * 3 + 2, fs_next[2])
+
                 last_pos = target_pos.copy()
                 last_ori = target_ori.copy()
 
@@ -544,62 +615,49 @@ class ZMPWalk:
         target_x = target_foot_pos[:, 0]
         target_y = target_foot_pos[:, 1]
         target_z = target_foot_pos[:, 2]
-        ank_roll = target_foot_ori[:, 0]
-        ank_pitch = target_foot_ori[:, 1]
-        hip_yaw = target_foot_ori[:, 2]
+        target_roll = target_foot_ori[:, 0]
+        target_pitch = target_foot_ori[:, 1]
+        target_yaw = target_foot_ori[:, 2]
 
-        offsets = self.robot.config["general"]["offsets"]
-
-        transformed_x = target_x * np.cos(hip_yaw) + target_y * np.sin(hip_yaw)
-        transformed_y = target_x * np.sin(hip_yaw) - target_y * np.cos(hip_yaw)
+        transformed_x = target_x * np.cos(target_yaw) + target_y * np.sin(target_yaw)
+        transformed_y = target_x * np.sin(target_yaw) - target_y * np.cos(target_yaw)
         transformed_z = (
-            offsets["hip_pitch_to_knee_z"]
-            + offsets["knee_to_ank_pitch_z"]
-            - target_z
-            - self.default_target_z
+            self.hip_to_knee_z + self.knee_to_ank_z - target_z - self.default_target_z
         )
 
-        hip_roll = np.arctan2(
-            transformed_y, transformed_z + offsets["hip_roll_to_pitch_z"]
-        )
+        hip_roll = np.arctan2(transformed_y, transformed_z - self.hip_pitch_to_roll_z)
 
         leg_projected_yz_length = np.sqrt(transformed_y**2 + transformed_z**2)
         leg_length = np.sqrt(transformed_x**2 + leg_projected_yz_length**2)
         leg_pitch = np.arctan2(transformed_x, leg_projected_yz_length)
         hip_disp_cos = (
-            leg_length**2
-            + offsets["hip_pitch_to_knee_z"] ** 2
-            - offsets["knee_to_ank_pitch_z"] ** 2
-        ) / (2 * leg_length * offsets["hip_pitch_to_knee_z"])
+            leg_length**2 + self.hip_to_knee_z**2 - self.knee_to_ank_z**2
+        ) / (2 * leg_length * self.hip_to_knee_z)
         hip_disp = np.arccos(np.clip(hip_disp_cos, -1.0, 1.0))
-        ank_disp = np.arcsin(
-            offsets["hip_pitch_to_knee_z"]
-            / offsets["knee_to_ank_pitch_z"]
-            * np.sin(hip_disp)
-        )
+        ank_disp = np.arcsin(self.hip_to_knee_z / self.knee_to_ank_z * np.sin(hip_disp))
         hip_pitch = leg_pitch + hip_disp
         knee_pitch = hip_disp + ank_disp
-        ank_pitch += knee_pitch - hip_pitch
+        ank_pitch = target_pitch + knee_pitch - hip_pitch
 
         if side == "left":
             return np.vstack(
                 [
-                    hip_pitch,
-                    hip_roll,
-                    -hip_yaw,
+                    -hip_pitch,
+                    -hip_roll,
+                    -target_yaw,
                     -knee_pitch,
-                    hip_roll - ank_roll,
+                    hip_roll - target_roll,
                     -ank_pitch,
                 ]
             ).T
         else:
             return np.vstack(
                 [
-                    -hip_pitch,
+                    hip_pitch,
                     -hip_roll,
-                    -hip_yaw,
+                    -target_yaw,
                     knee_pitch,
-                    hip_roll - ank_roll,
+                    hip_roll - target_roll,
                     ank_pitch,
                 ]
             ).T

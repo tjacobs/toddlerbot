@@ -20,10 +20,34 @@ toddlerbot.policies.calibrate module
    :undoc-members:
    :show-inheritance:
 
+toddlerbot.policies.cartwheel module
+------------------------------------
+
+.. automodule:: toddlerbot.policies.cartwheel
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+toddlerbot.policies.crawl module
+--------------------------------
+
+.. automodule:: toddlerbot.policies.crawl
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 toddlerbot.policies.dp\_policy module
 -------------------------------------
 
 .. automodule:: toddlerbot.policies.dp_policy
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+toddlerbot.policies.handstand module
+------------------------------------
+
+.. automodule:: toddlerbot.policies.handstand
    :members:
    :undoc-members:
    :show-inheritance:
@@ -40,14 +64,6 @@ toddlerbot.policies.pull\_up module
 -----------------------------------
 
 .. automodule:: toddlerbot.policies.pull_up
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-toddlerbot.policies.push\_cart module
--------------------------------------
-
-.. automodule:: toddlerbot.policies.push_cart
    :members:
    :undoc-members:
    :show-inheritance:

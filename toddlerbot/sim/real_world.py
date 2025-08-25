@@ -1,13 +1,20 @@
-import platform
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List
+"""Real-world robot interface for hardware integration.
+
+Provides RealWorld class to interface with physical ToddlerBot hardware,
+including Dynamixel motor control and IMU sensor integration.
+"""
+
+import time
+from typing import Dict
 
 import numpy as np
+import numpy.typing as npt
+from scipy.spatial.transform import Rotation as R
 
-from toddlerbot.actuation import JointState
+from toddlerbot.actuation import dynamixel_cpp
+from toddlerbot.sensing.IMU import ThreadedIMU
 from toddlerbot.sim import BaseSim, Obs
 from toddlerbot.sim.robot import Robot
-from toddlerbot.utils.file_utils import find_ports
 
 
 class RealWorld(BaseSim):
@@ -25,130 +32,85 @@ class RealWorld(BaseSim):
             negated_motor_names (List[str]): A list of motor names that require direction negation due to URDF configuration issues.
         """
         super().__init__("real_world")
+
         self.robot = robot
 
-        self.has_imu = self.robot.config["general"]["has_imu"]
-        self.has_dynamixel = self.robot.config["general"]["has_dynamixel"]
+        self.imu = None
+        try:
+            self.imu = ThreadedIMU()
+            self.imu.start()
 
-        # TODO: Fix the mate directions in the URDF and remove the negated_motor_names
-        self.negated_motor_names: List[str] = [
-            "neck_pitch_act",
-            "left_sho_roll",
-            "right_sho_roll",
-            "left_elbow_roll",
-            "right_elbow_roll",
-            "left_wrist_pitch_drive",
-            "right_wrist_pitch_drive",
-            "left_gripper_rack",
-            "right_gripper_rack",
-        ]
+        except Exception as e:
+            print(f"IMU not found: {e}")
 
-        self.initialize()
-
-    def initialize(self) -> None:
-        """Initializes the robot's components, including IMU and Dynamixel controllers, if available.
-
-        This method sets up a thread pool executor to initialize the IMU and Dynamixel controllers asynchronously. It checks the operating system type to determine the appropriate port description for Dynamixel communication. If the robot is configured with an IMU, it initializes the IMU in a separate thread. Similarly, if the robot has Dynamixel actuators, it configures and initializes the Dynamixel controller using the specified port, baud rate, and control parameters. After initialization, it retrieves the results of the asynchronous operations and assigns them to the respective attributes. Finally, it performs a series of observations to ensure the components are functioning correctly.
-        """
-        self.executor = ThreadPoolExecutor()
-
-        os_type = platform.system()
-
-        future_imu = None
-        if self.has_imu:
-            from toddlerbot.sensing.IMU import IMU
-
-            future_imu = self.executor.submit(IMU)
-
-        future_dynamixel = None
-        if self.has_dynamixel:
-            from toddlerbot.actuation.dynamixel_control import (
-                DynamixelConfig,
-                DynamixelController,
+        self.controllers = []
+        try:
+            self.controllers = dynamixel_cpp.create_controllers(
+                "ttyCH9344USB[0-9]+",  # "ttyUSB0",
+                robot.motor_kp_real,
+                robot.motor_kd_real,
+                robot.motor_zero_pos,
+                ["extended_position"] * robot.nu,
+                2000000,
+                1,
             )
-
-            description = (
-                "USB Serial Port"
-                if os_type == "Windows"
-                else "USB <-> Serial Converter"
+            dynamixel_cpp.initialize(self.controllers)
+            self.motor_ids = dynamixel_cpp.get_motor_ids(self.controllers)
+            motor_ids_flat = np.array(
+                sum((self.motor_ids[key] for key in sorted(self.motor_ids)), [])
             )
+            self.motor_sort_idx = np.argsort(motor_ids_flat)
+            self.motor_unsort_idx = motor_ids_flat
+            self.motor_lens = [
+                len(self.motor_ids[key]) for key in sorted(self.motor_ids)
+            ]
 
-            dynamixel_ports: List[str] = find_ports(description)
+        except Exception as e:
+            print(f"Dynamixel controller not found: {e}")
 
-            dynamixel_ids = self.robot.get_joint_attrs("type", "dynamixel", "id")
-            dynamixel_config = DynamixelConfig(
-                port=dynamixel_ports[0],
-                baudrate=self.robot.config["general"]["dynamixel_baudrate"],
-                control_mode=self.robot.get_joint_attrs(
-                    "type", "dynamixel", "control_mode"
-                ),
-                kP=self.robot.get_joint_attrs("type", "dynamixel", "kp_real"),
-                kI=self.robot.get_joint_attrs("type", "dynamixel", "ki_real"),
-                kD=self.robot.get_joint_attrs("type", "dynamixel", "kd_real"),
-                kFF2=self.robot.get_joint_attrs("type", "dynamixel", "kff2_real"),
-                kFF1=self.robot.get_joint_attrs("type", "dynamixel", "kff1_real"),
-                init_pos=self.robot.get_joint_attrs("type", "dynamixel", "init_pos"),
+        # Warm up the observation retrieval
+        imu_data = self.imu.get_latest_state()
+        counter = 0
+        while not imu_data:
+            counter += 1
+            print(
+                f"\rWaiting for real-world observation data... [{counter}]",
+                end="",
+                flush=True,
             )
-            future_dynamixel = self.executor.submit(
-                DynamixelController, dynamixel_config, dynamixel_ids
-            )
+            imu_data = self.imu.get_latest_state()
 
-        if future_dynamixel is not None:
-            self.dynamixel_controller = future_dynamixel.result()
-        if future_imu is not None:
-            try:
-                self.imu = future_imu.result()
-            except Exception as e:
-                print(e)
-                self.has_imu = False
-
-        for _ in range(100):
-            self.get_observation()
-
-    # @profile()
-    def process_motor_reading(self, results: Dict[str, Dict[int, JointState]]) -> Obs:
-        """Processes motor readings and returns an observation object.
-
-        Args:
-            results (Dict[str, Dict[int, JointState]]): A dictionary containing motor state data, indexed by motor type and ID.
-
-        Returns:
-            Obs: An observation object containing the current time, motor positions, velocities, and torques.
-        """
-        motor_state_dict_unordered: Dict[str, JointState] = {}
-        if self.has_dynamixel:
-            dynamixel_state = results["dynamixel"]
-            for motor_name in self.robot.get_joint_attrs("type", "dynamixel"):
-                motor_id = self.robot.config["joints"][motor_name]["id"]
-                motor_state_dict_unordered[motor_name] = dynamixel_state[motor_id]
-
-        time_curr = 0.0
-        motor_pos = np.zeros(len(self.robot.motor_ordering), dtype=np.float32)
-        motor_vel = np.zeros(len(self.robot.motor_ordering), dtype=np.float32)
-        motor_tor = np.zeros(len(self.robot.motor_ordering), dtype=np.float32)
-        for i, motor_name in enumerate(self.robot.motor_ordering):
-            if i == 0:
-                time_curr = motor_state_dict_unordered[motor_name].time
-
-            if motor_name in self.negated_motor_names:
-                motor_pos[i] = -motor_state_dict_unordered[motor_name].pos
-                motor_vel[i] = -motor_state_dict_unordered[motor_name].vel
-            else:
-                motor_pos[i] = motor_state_dict_unordered[motor_name].pos
-                motor_vel[i] = motor_state_dict_unordered[motor_name].vel
-
-            motor_tor[i] = abs(motor_state_dict_unordered[motor_name].tor)
-
-        obs = Obs(
-            time=time_curr,
-            motor_pos=motor_pos,
-            motor_vel=motor_vel,
-            motor_tor=motor_tor,
-        )
-        return obs
+        print("\nData received.")
 
     def step(self):
+        """Perform a simulation step (no-op for real world interface)."""
         pass
+
+    def motor_cur_to_tor(
+        self, motor_cur: npt.NDArray[np.float32], motor_vel: npt.NDArray[np.float32]
+    ) -> npt.NDArray[np.float32]:
+        """Convert motor current to torque using motor characteristics.
+
+        Args:
+            motor_cur: Motor current values in milliamps.
+            motor_vel: Motor velocity values.
+
+        Returns:
+            Calculated motor torque values.
+        """
+        motor_cur_amp = motor_cur / 1000
+        motor_tor = (
+            np.maximum(np.abs(motor_cur_amp) - self.robot.motor_bi, 0)
+            / self.robot.motor_ki
+            * np.sign(motor_cur_amp)
+        )
+        motor_tor[motor_cur_amp * motor_vel < 0] *= 3
+        motor_tor = np.where(
+            self.robot.cur_sensor_mask == 1,
+            motor_tor,
+            motor_cur_amp * self.robot.motor_tau_max,
+        )
+        return motor_tor
 
     # @profile()
     def get_observation(self, retries: int = 0):
@@ -162,57 +124,64 @@ class RealWorld(BaseSim):
         Returns:
             An observation object containing processed sensor data, including motor states and, if available, IMU angular velocity and Euler angles.
         """
-        results: Dict[str, Any] = {}
-        futures: Dict[str, Any] = {}
-        if self.has_dynamixel:
-            # results["dynamixel"] = self.dynamixel_controller.get_motor_state(retries)
-            futures["dynamixel"] = self.executor.submit(
-                self.dynamixel_controller.get_motor_state, retries
-            )
+        motor_state = dynamixel_cpp.get_motor_states(self.controllers, 0)
 
-        if self.has_imu:
-            # results["imu"] = self.imu.get_state()
-            futures["imu"] = self.executor.submit(self.imu.get_state)
+        all_motor_pos = []
+        all_motor_vel = []
+        all_motor_cur = []
 
-        # start_times = {key: time.time() for key in futures.keys()}
-        for future in as_completed(futures.values()):
-            for key, f in futures.items():
-                if f is future:
-                    # end_time = time.time()
-                    results[key] = future.result()
-                    # log(f"Time taken for {key}: {end_time - start_times[key]}", header=snake2camel(self.name), level="debug")
-                    break
+        for key in sorted(self.motor_ids.keys()):
+            data = motor_state[key]
+            pos = data["pos"]
+            vel = data["vel"]
+            cur = data["cur"]
 
-        obs = self.process_motor_reading(results)
+            # Append all ids and corresponding data
+            all_motor_pos.extend(pos)
+            all_motor_vel.extend(vel)
+            all_motor_cur.extend(cur)
 
-        if self.has_imu:
-            obs.ang_vel = np.array(results["imu"]["ang_vel"], dtype=np.float32)
-            obs.euler = np.array(results["imu"]["euler"], dtype=np.float32)
+        # Convert to numpy arrays
+        motor_pos = np.array(all_motor_pos, dtype=np.float32)[self.motor_sort_idx]
+        motor_vel = np.array(all_motor_vel, dtype=np.float32)[self.motor_sort_idx]
+        motor_cur = np.array(all_motor_cur, dtype=np.float32)[self.motor_sort_idx]
+        motor_tor = self.motor_cur_to_tor(motor_cur, motor_vel)
 
-        return obs
+        # Get the IMU data (optional)
+        quat, ang_vel = None, None
+        if self.imu:
+            quat, _, ang_vel = self.imu.get_latest_state()
+
+        return Obs(
+            time=time.monotonic(),
+            motor_pos=motor_pos,
+            motor_vel=motor_vel,
+            motor_cur=motor_cur,
+            motor_tor=motor_tor,
+            ang_vel=np.array(ang_vel, dtype=np.float32)
+            if ang_vel is not None
+            else None,
+            rot=R.from_quat(quat, scalar_first=True) if quat is not None else None,
+        )
 
     # @profile()
-    def set_motor_target(self, motor_angles: Dict[str, float]):
+    def set_motor_target(
+        self, motor_angles: Dict[str, float] | npt.NDArray[np.float32]
+    ):
         """Sets the target angles for the robot's motors, adjusting for any negated motor directions and updating the positions of Dynamixel motors if present.
 
         Args:
             motor_angles (Dict[str, float]): A dictionary mapping motor names to their target angles in degrees.
         """
+        if isinstance(motor_angles, dict):
+            motor_pos = np.array(list(motor_angles.values()), dtype=np.float32)
+        else:
+            motor_pos = np.array(motor_angles, dtype=np.float32)
 
-        # Directions are tuned to match the assembly of the robot.
-        motor_angles_updated: Dict[str, float] = {}
-        for name, angle in motor_angles.items():
-            if name in self.negated_motor_names:
-                motor_angles_updated[name] = -angle
-            else:
-                motor_angles_updated[name] = angle
-
-        if self.has_dynamixel:
-            dynamixel_pos = [
-                motor_angles_updated[k]
-                for k in self.robot.get_joint_attrs("type", "dynamixel")
-            ]
-            self.executor.submit(self.dynamixel_controller.set_pos, dynamixel_pos)
+        reordered_pos = motor_pos[self.motor_unsort_idx]
+        splits = np.split(reordered_pos, np.cumsum(self.motor_lens)[:-1])
+        pos_vecs = [x.tolist() for x in splits]
+        dynamixel_cpp.set_motor_pos(self.controllers, pos_vecs)
 
     def set_motor_kps(self, motor_kps: Dict[str, float]):
         """Sets the proportional gain (Kp) values for motors of type 'dynamixel'.
@@ -222,26 +191,21 @@ class RealWorld(BaseSim):
         Args:
             motor_kps (Dict[str, float]): A dictionary mapping motor names to their desired Kp values.
         """
+        dynamixel_kps = np.array(self.robot.motor_kp_real, dtype=np.float32)
+        for i, k in enumerate(self.robot.motor_ordering):
+            if k in motor_kps:
+                dynamixel_kps[i] = motor_kps[k]
 
-        if self.has_dynamixel:
-            dynamixel_kps: List[float] = []
-            for k in self.robot.get_joint_attrs("type", "dynamixel"):
-                if k in motor_kps:
-                    dynamixel_kps.append(motor_kps[k])
-                else:
-                    dynamixel_kps.append(self.robot.config["joints"][k]["kp_real"])
-
-            self.executor.submit(self.dynamixel_controller.set_kp, dynamixel_kps)
+        raise NotImplementedError(
+            "Setting motor Kp values is not implemented in the real world interface."
+        )
 
     def close(self):
-        """Closes all active components and shuts down the executor.
+        """Closes all active components.
 
-        This method checks for active components such as Dynamixel motors and IMU sensors. If they are present, it submits tasks to close them using the executor. Finally, it shuts down the executor, ensuring all submitted tasks are completed before termination.
+        This method checks for active components such as Dynamixel motors and IMU sensors. It safely closes the connections to these components, ensuring that resources are released properly.
         """
+        if self.imu:
+            self.imu.close()
 
-        if self.has_dynamixel:
-            self.executor.submit(self.dynamixel_controller.close_motors)
-        if self.has_imu:
-            self.executor.submit(self.imu.close)
-
-        self.executor.shutdown(wait=True)
+        dynamixel_cpp.close(self.controllers)

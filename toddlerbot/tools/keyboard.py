@@ -1,3 +1,10 @@
+"""Keyboard input handler for robot control actions.
+
+This module provides a simple keyboard interface for triggering specific actions
+via key presses. It uses pynput to capture keyboard events and map them to
+registered callback functions.
+"""
+
 from typing import Callable, Dict
 
 try:

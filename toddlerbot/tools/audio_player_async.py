@@ -1,3 +1,5 @@
+"""Asynchronous audio player utilities."""
+
 import threading
 from typing import List
 

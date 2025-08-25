@@ -1,3 +1,5 @@
+"""JAX and PyTorch compatibility testing."""
+
 import argparse
 import importlib
 

@@ -1,3 +1,9 @@
+"""Deep policy for vision-based manipulation tasks using learned models.
+
+This module implements a deep policy that combines vision and action data
+to perform complex manipulation tasks like picking and hugging using trained models.
+"""
+
 import os
 import time
 from collections import deque
@@ -7,18 +13,21 @@ import cv2
 import joblib
 import numpy as np
 import numpy.typing as npt
+from moviepy.editor import ImageSequenceClip
 
 from toddlerbot.manipulation.inference_class import DPModel
 from toddlerbot.policies.balance_pd import BalancePDPolicy
 from toddlerbot.sensing.camera import Camera
-from toddlerbot.sim import Obs
+from toddlerbot.sim import BaseSim, Obs
 from toddlerbot.sim.robot import Robot
 from toddlerbot.tools.joystick import Joystick
 from toddlerbot.utils.comm_utils import ZMQNode
-from toddlerbot.utils.math_utils import interpolate_action
+from toddlerbot.utils.math_utils import get_action_traj, interpolate_action
+
+# TODO: this is broken
 
 
-class DPPolicy(BalancePDPolicy, policy_name="dp"):
+class DPPolicy(BalancePDPolicy):
     """Policy for executing manipulation tasks using a deep policy model."""
 
     def __init__(
@@ -110,7 +119,6 @@ class DPPolicy(BalancePDPolicy, policy_name="dp"):
             )
 
         if len(task) > 0:
-            self.manip_duration = 2.0
             self.idle_duration = 5.0 if task == "hug" else 6.0
             self.reset_duration = 7.0 if task == "hug" else 2.0
 
@@ -133,7 +141,7 @@ class DPPolicy(BalancePDPolicy, policy_name="dp"):
                     [self.manip_motor_pos, np.zeros(2, dtype=np.float32)]
                 )
 
-        self.capture_frame = True
+        self.capture_rgb = True
         self.manip_count = 0
         self.wrap_up_time = None
 
@@ -165,13 +173,13 @@ class DPPolicy(BalancePDPolicy, policy_name="dp"):
         """
         if len(self.obs_deque) == self.model.obs_horizon:
             if len(self.model_action_seq) == 0:
-                t1 = time.time()
+                t1 = time.monotonic()
                 self.model_action_seq = list(
                     self.model.get_action_from_obs(self.obs_deque)[
                         self.action_dropout :
                     ]
                 )
-                t2 = time.time()
+                t2 = time.monotonic()
                 print(f"Model inference time: {t2 - t1:.3f}s")
 
             arm_motor_pos = self.model_action_seq.pop(0)
@@ -193,7 +201,7 @@ class DPPolicy(BalancePDPolicy, policy_name="dp"):
         return arm_motor_pos
 
     def step(
-        self, obs: Obs, is_real: bool = False
+        self, obs: Obs, sim: BaseSim
     ) -> Tuple[Dict[str, float], npt.NDArray[np.float32]]:
         """Executes a step in the robot's control loop, updating motor targets and handling task-specific logic.
 
@@ -204,7 +212,7 @@ class DPPolicy(BalancePDPolicy, policy_name="dp"):
         Returns:
             Tuple[Dict[str, float], npt.NDArray[np.float32]]: A tuple containing control inputs and the target motor positions.
         """
-        control_inputs, motor_target = super().step(obs, is_real)
+        control_inputs, motor_target = super().step(obs, sim)
 
         if (
             obs.time - self.time_start
@@ -223,14 +231,19 @@ class DPPolicy(BalancePDPolicy, policy_name="dp"):
                     release_motor_pos = self.manip_motor_pos.copy()
                     release_motor_pos[self.waist_motor_indices] = waist_motor_pos
 
-                    twist_time, twist_action = self.move(
-                        obs.time - self.control_dt,
+                    twist_time, twist_action = get_action_traj(
+                        obs.time,
                         obs.motor_pos,
                         twist_motor_pos,
-                        (self.reset_duration - 1) / 3,  # 2
+                        (self.reset_duration - 1) / 3,
+                        self.control_dt,
                     )
-                    release_time, release_action = self.move(
-                        twist_time[-1], twist_motor_pos, release_motor_pos, 1.0
+                    release_time, release_action = get_action_traj(
+                        twist_time[-1] + self.control_dt,
+                        twist_motor_pos,
+                        release_motor_pos,
+                        1.0,
+                        self.control_dt,
                     )
                     back_motor_pos = self.manip_motor_pos.copy()
                     back_motor_pos[self.left_sho_pitch_idx] = self.default_motor_pos[
@@ -241,17 +254,19 @@ class DPPolicy(BalancePDPolicy, policy_name="dp"):
                     ]
                     back_motor_pos[self.left_sho_roll_idx] = -1.4
                     back_motor_pos[self.right_sho_roll_idx] = -1.4
-                    back_time, back_action = self.move(
-                        release_time[-1],
+                    back_time, back_action = get_action_traj(
+                        release_time[-1] + self.control_dt,
                         release_motor_pos,
                         back_motor_pos,  # self.manip_motor_pos,
-                        (self.reset_duration - 1) / 3,  # 2
+                        (self.reset_duration - 1) / 3,
+                        self.control_dt,
                     )
-                    default_time, default_action = self.move(
-                        back_time[-1],
+                    default_time, default_action = get_action_traj(
+                        back_time[-1] + self.control_dt,
                         back_motor_pos,
                         self.default_motor_pos,
                         (self.reset_duration - 1) / 3,
+                        self.control_dt,
                     )
 
                     self.wrap_up_time = np.concatenate(
@@ -261,11 +276,12 @@ class DPPolicy(BalancePDPolicy, policy_name="dp"):
                         [twist_action, release_action, back_action, default_action]
                     )
                 else:
-                    self.wrap_up_time, self.wrap_up_action = self.move(
-                        obs.time - self.control_dt,
+                    self.wrap_up_time, self.wrap_up_action = get_action_traj(
+                        obs.time,
                         obs.motor_pos,
                         self.manip_motor_pos,
                         self.reset_duration,
+                        control_dt=self.control_dt,
                     )
 
             if self.wrap_up_time is not None and obs.time < self.wrap_up_time[-1]:
@@ -321,3 +337,11 @@ class DPPolicy(BalancePDPolicy, policy_name="dp"):
             self.model_action_seq = []
 
         return control_inputs, motor_target
+
+    def close(self, exp_folder_path):
+        """Save recorded camera frames as a video."""
+        if len(self.camera_frame_list) > 0:
+            fps = int(1 / np.diff(self.camera_time_list).mean())
+            video_path = os.path.join(exp_folder_path, "visual_obs.mp4")
+            video_clip = ImageSequenceClip(self.camera_frame_list, fps=fps)
+            video_clip.write_videofile(video_path, codec="libx264", fps=fps)

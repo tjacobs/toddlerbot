@@ -1,3 +1,5 @@
+"""Fisheye stereo camera calibration and 3D point cloud generation."""
+
 import argparse
 import glob
 import os
@@ -28,6 +30,7 @@ def ensure_even(x):
 # Utility Functions
 # --------------------------
 def read_video_frames(video_path, process_length, target_fps=-1, max_res=-1):
+    """Read video frames with optional resizing and frame rate adjustment."""
     if DECORD_AVAILABLE:
         vid = VideoReader(video_path, ctx=cpu(0))
         original_height, original_width = vid.get_batch([0]).shape[1:3]
@@ -81,9 +84,7 @@ def read_video_frames(video_path, process_length, target_fps=-1, max_res=-1):
 
 
 def collect_images(save_path, num_images):
-    """
-    Collect calibration images from stereo cameras.
-    """
+    """Collect calibration images from stereo cameras."""
     cam_left = Camera("left")
     cam_right = Camera("right")
 
@@ -111,9 +112,7 @@ def collect_images(save_path, num_images):
 
 
 def collect_test_images(save_path):
-    """
-    Collect calibration images from stereo cameras.
-    """
+    """Collect test images from stereo cameras."""
     cam_left = Camera("left")
     cam_right = Camera("right")
 
@@ -141,9 +140,7 @@ def collect_test_images(save_path):
 
 
 def fisheye_calibration(image_paths, checkerboard_size):
-    """
-    Calibrate a fisheye camera and visualize chessboard corners.
-    """
+    """Calibrate a fisheye camera and visualize chessboard corners."""
     termination_criteria = (
         cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER,
         30,
@@ -203,9 +200,7 @@ def fisheye_calibration(image_paths, checkerboard_size):
 def stereo_calibration(
     image_paths_left, image_paths_right, checkerboard_size, K1, D1, K2, D2
 ):
-    """
-    Calibrate stereo cameras and compute rectification transforms.
-    """
+    """Calibrate stereo cameras and compute rectification transforms."""
     # Create object points for the checkerboard
     objp = np.zeros((1, checkerboard_size[0] * checkerboard_size[1], 3), np.float32)
     objp[0, :, :2] = np.mgrid[
@@ -274,9 +269,7 @@ def stereo_calibration(
 
 
 def rectify_stereo(K1, D1, K2, D2, R, T, image_size, left_image, right_image):
-    """
-    Rectify stereo images, compute Q matrix, and visualize rectified images.
-    """
+    """Rectify stereo images, compute Q matrix, and visualize rectified images."""
     # Perform rectification
     R1, R2, P1, P2, Q = cv2.fisheye.stereoRectify(
         K1,
@@ -364,9 +357,7 @@ def compute_disparity_and_point_cloud(
     left_image,
     right_image,
 ):
-    """
-    Compute disparity map and generate point cloud.
-    """
+    """Compute disparity map and generate point cloud."""
     # Compute rectification maps
     map1_left, map2_left = cv2.fisheye.initUndistortRectifyMap(
         K1, D1, R1, P1, image_size, cv2.CV_16SC2
@@ -518,12 +509,8 @@ if __name__ == "__main__":
     exp_folder_path = f"results/{exp_name}_{time_str}"
     os.makedirs(exp_folder_path, exist_ok=True)
 
-    calib_params_path = os.path.join(
-        "toddlerbot", "sensing", "calibration_params_blake.pkl"
-    )
-    rec_params_path = os.path.join(
-        "toddlerbot", "sensing", "rectification_params_blake.npz"
-    )
+    calib_params_path = os.path.join("toddlerbot", "depth", "params", "calibration.pkl")
+    rec_params_path = os.path.join("toddlerbot", "depth", "params", "rectification.npz")
 
     if args.collect_rectified:
         with open(calib_params_path, "rb") as f:
@@ -653,8 +640,8 @@ if __name__ == "__main__":
         P2 = rec_params["P2"]
         Q = rec_params["Q"]
 
-        left_image = cv2.imread(os.path.join(exp_folder_path, "left_test_00.png"))
-        right_image = cv2.imread(os.path.join(exp_folder_path, "right_test_00.png"))
+        left_image = cv2.imread(os.path.join(exp_folder_path, "left_00.png"))
+        right_image = cv2.imread(os.path.join(exp_folder_path, "right_00.png"))
         compute_disparity_and_point_cloud(
             K1,
             D1,

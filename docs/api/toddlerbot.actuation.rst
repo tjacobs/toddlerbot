@@ -4,18 +4,10 @@ toddlerbot.actuation package
 Submodules
 ----------
 
-toddlerbot.actuation.dynamixel\_client module
----------------------------------------------
+toddlerbot.actuation.dynamixel\_cpp module
+------------------------------------------
 
-.. automodule:: toddlerbot.actuation.dynamixel_client
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-toddlerbot.actuation.dynamixel\_control module
-----------------------------------------------
-
-.. automodule:: toddlerbot.actuation.dynamixel_control
+.. automodule:: toddlerbot.actuation.dynamixel_cpp
    :members:
    :undoc-members:
    :show-inheritance:

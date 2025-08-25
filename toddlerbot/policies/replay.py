@@ -1,26 +1,28 @@
-import os
-from typing import Dict, List, Tuple
+"""Motion replay policy for executing pre-recorded movements.
+
+This module implements a replay policy that can playback keyframe animations
+or recorded motion data with proper interpolation and synchronization.
+"""
+
+from typing import Dict, Tuple
 
 import joblib
 import numpy as np
 import numpy.typing as npt
 
 from toddlerbot.policies import BasePolicy
-from toddlerbot.sim import Obs
+from toddlerbot.sim import BaseSim, Obs
 from toddlerbot.sim.robot import Robot
-from toddlerbot.tools.keyboard import Keyboard
-from toddlerbot.utils.math_utils import interpolate_action
-
-# This script replays a keyframe animation or recorded motion data.
+from toddlerbot.utils.math_utils import get_action_traj, interpolate_action
 
 
-class ReplayPolicy(BasePolicy, policy_name="replay"):
+class ReplayPolicy(BasePolicy):
     def __init__(
         self,
         name: str,
         robot: Robot,
         init_motor_pos: npt.NDArray[np.float32],
-        run_name: str,
+        path: str,
     ):
         """Initializes the class with motion data and configuration.
 
@@ -37,114 +39,43 @@ class ReplayPolicy(BasePolicy, policy_name="replay"):
         """
         super().__init__(name, robot, init_motor_pos)
 
-        motion_file_path = os.path.join("motion", f"{run_name}.pkl")
-        if os.path.exists(motion_file_path):
-            data_dict = joblib.load(motion_file_path)
+        data_dict = joblib.load(path)
 
+        if "time" in data_dict and "action" in data_dict:
             self.time_arr = np.array(data_dict["time"])
-            self.action_arr = np.array(data_dict["action_traj"], dtype=np.float32)
+            self.action_arr = np.array(data_dict["action"], dtype=np.float32)
+        elif "obs_list" in data_dict and "action_list" in data_dict:
+            self.time_arr = np.array([obs.time for obs in data_dict["obs_list"]])
+            self.action_arr = np.array(data_dict["action_list"], dtype=np.float32)
 
-            if robot.has_gripper and self.action_arr.shape[1] < len(
-                robot.motor_ordering
-            ):
-                self.action_arr = np.concatenate(
-                    [self.action_arr, np.zeros((self.action_arr.shape[0], 2))], axis=1
-                )
-
-            if not robot.has_gripper and self.action_arr.shape[1] > len(
-                robot.motor_ordering
-            ):
-                self.action_arr = self.action_arr[:, :-2]
-        else:
-            # Use glob to find all pickle files matching the pattern
-            dataset_file_path = os.path.join("results", run_name, "toddlerbot_0.lz4")
-            pickle_file_path = os.path.join("results", run_name, "log_data.pkl")
-
-            if os.path.exists(dataset_file_path):
-                data_dict = self.convert_dataset(joblib.load(dataset_file_path))
-            elif os.path.exists(pickle_file_path):
-                data_dict = joblib.load(pickle_file_path)
-            else:
-                raise ValueError(
-                    f"No data files found in {dataset_file_path} or {pickle_file_path}"
-                )
-
-            motor_angles_list: List[Dict[str, float]] = data_dict["motor_angles_list"]
-            self.time_arr = np.array(
-                [data_dict["obs_list"][i].time for i in range(len(motor_angles_list))]
+        if robot.has_gripper and self.action_arr.shape[1] < len(robot.motor_ordering):
+            self.action_arr = np.concatenate(
+                [self.action_arr, np.zeros((self.action_arr.shape[0], 2))], axis=1
             )
-            self.time_arr = self.time_arr - self.time_arr[0]
-            self.action_arr = np.array(
-                [list(motor_angles.values()) for motor_angles in motor_angles_list],
-                dtype=np.float32,
-            )
+
+        if not robot.has_gripper and self.action_arr.shape[1] > len(
+            robot.motor_ordering
+        ):
+            self.action_arr = self.action_arr[:, :-2]
 
         start_idx = 0
-        for idx in range(len(self.action_arr)):
-            if np.allclose(self.default_motor_pos, self.action_arr[idx], atol=1e-1):
+        for idx, action in enumerate(self.action_arr):
+            if np.allclose(self.default_motor_pos, action, atol=0.05):
                 start_idx = idx
-                print(f"Truncating dataset at index {start_idx}")
+            elif start_idx != 0:
+                print(f"Truncating dataset at index {start_idx}...")
                 break
 
         self.time_arr = self.time_arr[start_idx:]
+        self.time_arr -= self.time_arr[0]
         self.action_arr = self.action_arr[start_idx:]
 
         self.step_curr = 0
-        self.keyframes: List[npt.NDArray[np.float32]] = []
-        self.keyframe_saved = False
         self.is_prepared = False
         self.is_done = False
-        self.time_start = self.prep_duration
-
-        self.keyboard = None
-        try:
-            self.keyboard = Keyboard()
-
-            def save(action: npt.NDArray[np.float32]):
-                self.keyframes.append(action)
-                print(f"Keyframe added at step {self.step_curr}")
-
-            self.keyboard.register("save", save)
-
-        except Exception:
-            print("Keyboard is not available")
-
-    def convert_dataset(self, data_dict: Dict):
-        """Converts a dataset to the required format for processing with toddlerbot_arms.
-
-        This function processes the input dataset dictionary by iterating over each time step,
-        creating an observation object with initialized motor position, velocity, and torque arrays,
-        and mapping motor positions to their respective motor names. The converted data is stored
-        in a dictionary with lists of observations and motor angles.
-
-        Args:
-            data_dict (Dict): A dictionary containing the dataset with keys such as "time" and "motor_pos".
-
-        Returns:
-            Dict[str, List]: A dictionary with two keys: "obs_list" containing observation objects and
-            "motor_angles_list" containing dictionaries of motor angles.
-        """
-        # convert the dataset to the correct format
-        # dataset is assumed to be logged on toddlerbot_arms
-        converted_dict: Dict[str, List] = {"obs_list": [], "motor_angles_list": []}
-        for i in range(data_dict["time"].shape[0]):
-            obs = Obs(
-                time=data_dict["time"][i],
-                motor_pos=np.zeros(14, dtype=np.float32),
-                motor_vel=np.zeros(14, dtype=np.float32),
-                motor_tor=np.zeros(14, dtype=np.float32),
-            )
-            motor_angles = dict(
-                zip(self.robot.motor_ordering, data_dict["motor_pos"][i])
-            )
-
-            converted_dict["obs_list"].append(obs)
-            converted_dict["motor_angles_list"].append(motor_angles)
-
-        return converted_dict
 
     def step(
-        self, obs: Obs, is_real: bool = False
+        self, obs: Obs, sim: BaseSim
     ) -> Tuple[Dict[str, float], npt.NDArray[np.float32]]:
         """Executes a single step in the simulation or real environment, returning the current action.
 
@@ -159,13 +90,15 @@ class ReplayPolicy(BasePolicy, policy_name="replay"):
         """
         if not self.is_prepared:
             self.is_prepared = True
-            self.prep_duration = 7.0 if is_real else 2.0
-            self.prep_time, self.prep_action = self.move(
-                -self.control_dt,
+            self.prep_duration = 7.0
+            self.time_start = self.prep_duration
+            self.prep_time, self.prep_action = get_action_traj(
+                0.0,
                 self.init_motor_pos,
                 self.action_arr[0],
                 self.prep_duration,
-                end_time=5.0 if is_real else 0.0,
+                self.control_dt,
+                end_time=5.0,
             )
 
         if obs.time < self.prep_duration:
@@ -179,11 +112,6 @@ class ReplayPolicy(BasePolicy, policy_name="replay"):
 
         if curr_idx == len(self.action_arr) - 1:
             self.is_done = True
-
-        if self.keyboard is not None:
-            key_inputs = self.keyboard.get_keyboard_input()
-            for key in key_inputs:
-                self.keyboard.check(key, action=action)
 
         self.step_curr += 1
 

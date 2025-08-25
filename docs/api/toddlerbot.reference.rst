@@ -4,10 +4,18 @@ toddlerbot.reference package
 Submodules
 ----------
 
-toddlerbot.reference.balance\_pd\_ref module
---------------------------------------------
+toddlerbot.reference.cartwheel\_ref module
+------------------------------------------
 
-.. automodule:: toddlerbot.reference.balance_pd_ref
+.. automodule:: toddlerbot.reference.cartwheel_ref
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+toddlerbot.reference.crawl\_ref module
+--------------------------------------
+
+.. automodule:: toddlerbot.reference.crawl_ref
    :members:
    :undoc-members:
    :show-inheritance:
@@ -16,14 +24,6 @@ toddlerbot.reference.motion\_ref module
 ---------------------------------------
 
 .. automodule:: toddlerbot.reference.motion_ref
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-toddlerbot.reference.walk\_simple\_ref module
----------------------------------------------
-
-.. automodule:: toddlerbot.reference.walk_simple_ref
    :members:
    :undoc-members:
    :show-inheritance:

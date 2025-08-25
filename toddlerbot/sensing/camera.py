@@ -1,3 +1,9 @@
+"""Camera interface module for AprilTag detection and stereo vision.
+
+Provides Camera class for capturing images from stereo cameras and AprilTagDetector
+for detecting and tracking AprilTag markers with pose estimation.
+"""
+
 import os
 import pickle
 import subprocess
@@ -131,6 +137,7 @@ class Camera:
         # Run the command
         subprocess.run(
             f"v4l2-ctl --device=/dev/video{self.camera_id} --set-ctrl=auto_exposure=1,exposure_time_absolute=30",
+            # f"v4l2-ctl --device=/dev/video{self.camera_id} --set-ctrl=brightness=48,exposure_time_absolute=30",
             shell=True,
             text=True,
             check=True,
@@ -148,8 +155,9 @@ class Camera:
 
         self.detector = AprilTagDetector()
 
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        calib_params_path = os.path.join(script_dir, "calibration_params.pkl")
+        calib_params_path = os.path.join(
+            "toddlerbot", "depth", "params", "calibration.pkl"
+        )
         with open(calib_params_path, "rb") as f:
             calib_params = pickle.load(f)
             self.intrinsics = (

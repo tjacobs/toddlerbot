@@ -1,3 +1,10 @@
+"""ZMQ JPEG image receiver for real-time video streaming.
+
+This module receives JPEG-compressed images from a ZMQ connection and displays them
+in real-time with latency measurements. It's typically used on a remote controller
+to view the robot's camera feed.
+"""
+
 import time
 
 import cv2
@@ -42,7 +49,7 @@ def main():
 
         print(frame.shape)
 
-        latency = time.time() - msg_time
+        latency = time.monotonic() - msg_time
         print(f"Latency: {latency * 1000:.2f} ms")
 
         cv2.imshow("Received Image", frame)

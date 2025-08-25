@@ -19,34 +19,11 @@ We recommend storing your API key and secret in environment variables, and you c
 
 Read the `config doc <https://onshape-to-robot.readthedocs.io/en/latest/config.html>`__ first if you have any issues.
 
-We need to install MeshLab to simplify the meshes downloaded from Onshape in the URDF files.
-
-.. tabs::
-
-   .. group-tab:: Linux
-
-      ::
-
-         sudo apt-get install meshlab
-
-
-   .. group-tab:: Mac OSX (arm64)
-
-      We recommend you install MeshLab releases older than 2020.12, such as `2020.9 <https://github.com/cnr-isti-vclab/meshlab/releases/tag/Meshlab-2020.09>`__.
-      Later releases removed the support for ``meshlabserver``.
-
-      Add the following line to your ``~/.bashrc``:
-
-      ::
-
-         export PATH="/Applications/meshlab.app/Contents/MacOS:$PATH"
-
-
 Run the following script and follow the instructions:
 
 ::
 
-   bash scripts/onshape_to_robot.sh --robot <robot_name>
+   python toddlerbot/descriptions/onshape_to_robot.py --robot <robot_name>
 
 
 Please carefully read the terminal messages printed from this script.

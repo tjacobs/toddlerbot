@@ -1,15 +1,15 @@
+"""Visualization utilities and helper functions."""
+
 import functools
+import inspect
 import os
 import pickle
 import platform
 import subprocess
-import time
-from typing import Any, Callable, Dict
+from typing import Any, Callable
 
 import matplotlib.pyplot as plt
 import seaborn as sns
-
-from toddlerbot.utils.misc_utils import log
 
 
 def is_x11_available():
@@ -48,17 +48,54 @@ else:
 sns.set_theme(style="darkgrid")
 
 
+def log_plot_config(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        sig = inspect.signature(func)
+        bound = sig.bind(*args, **kwargs)
+        bound.apply_defaults()
+        params = dict(bound.arguments)
+
+        # Extract necessary config values safely
+        file_name = params.get("file_name", "plot")
+        file_suffix = params.get("file_suffix", "")
+        save_path = params.get("save_path", "")
+        save_config = params.get("save_config", False)
+        blocking = params.get("blocking", True)
+
+        if save_config and save_path:
+            if len(file_suffix) > 0:
+                file_suffix = f"_{file_suffix}"
+            name = f"{file_name}{file_suffix}"
+
+            config = {
+                "function": f"{func.__module__}.{func.__name__}",
+                "parameters": params,
+            }
+
+            os.makedirs(save_path, exist_ok=True)
+            config_path = os.path.join(save_path, f"{name}_config.pkl")
+            with open(config_path, "wb") as f:
+                pickle.dump(config, f)
+            print(f"[Visualization] Configuration saved to: {config_path}")
+
+        if blocking:
+            return func(*args, **kwargs)
+        else:
+            return lambda: None
+
+    return wrapper
+
+
 def make_vis_function(
     func: Callable[..., Any],
     ax: Any = None,
     title: str = "",
     x_label: str = "",
     y_label: str = "",
-    save_config: bool = False,
     save_path: str = "",
     file_name: str = "",
     file_suffix: str = "",
-    blocking: bool = True,
 ):
     """Executes a visualization function with specified parameters and optional configuration saving.
 
@@ -77,34 +114,15 @@ def make_vis_function(
 
     @functools.wraps(func)
     def wrapped_function(*args, **kwargs) -> Any | None:
-        if len(file_suffix) == 0:
-            suffix = time.strftime("%Y%m%d_%H%M%S")
+        if len(file_suffix) > 0:
+            suffix = f"_{file_suffix}"
         else:
-            suffix = file_suffix
-
-        if len(suffix) > 0:
-            suffix = f"_{suffix}"
+            suffix = ""
 
         if len(file_name) == 0:
             name = f"{title.lower().replace(' ', '_')}{suffix}"
         else:
             name = f"{file_name}{suffix}"
-
-        # Save configuration if requested
-        if save_config and save_path:
-            config: Dict[str, Any] = {
-                "function": f"{func.__module__}.{func.__name__}",
-                "parameters": kwargs,
-            }
-
-            config_file_name = f"{name}_config.pkl"
-            config_path = os.path.join(save_path, config_file_name)
-            with open(config_path, "wb") as file:
-                pickle.dump(config, file)
-                log(f"Configuration saved to: {config_path}", header="Visualization")
-
-        if not blocking:
-            return None
 
         # Execute the original function
         result = func(*args, **kwargs)
@@ -128,7 +146,7 @@ def make_vis_function(
                 plt.savefig(png_file_path)
                 svg_file_path = os.path.join(save_path, f"{name}.svg")
                 plt.savefig(svg_file_path)
-                log(f"Graph saved as: {png_file_path}", header="Visualization")
+                print(f"[Visualization] Graph saved as: {png_file_path} and .svg")
 
             elif plt.get_backend() not in non_interactive_backends:
                 plt.show()
@@ -162,4 +180,11 @@ def load_and_run_visualization(config_path: str):
     func_module, func_name = config["function"].rsplit(".", 1)
     module = __import__(func_module, fromlist=[func_name])
     func = getattr(module, func_name)
-    func(**config["parameters"], blocking=True)
+    if "blocking" in config["parameters"]:
+        config["parameters"]["blocking"] = True
+    if "save_config" in config["parameters"]:
+        config["parameters"]["save_config"] = False
+
+    result = func(**config["parameters"])
+    if isinstance(result, Callable):
+        result()

@@ -1,0 +1,6 @@
+TerrainConfig.random_spawn = True
+TerrainConfig.manual_map = [
+    ["flat", "rough", "bumps"],
+    ["rough", "bumps", "flat"],
+    ["bumps", "flat", "rough"]
+]

@@ -44,6 +44,14 @@ toddlerbot.tools.keyboard module
    :undoc-members:
    :show-inheritance:
 
+toddlerbot.tools.overlay\_eval module
+-------------------------------------
+
+.. automodule:: toddlerbot.tools.overlay_eval
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 toddlerbot.tools.run\_sysID module
 ----------------------------------
 

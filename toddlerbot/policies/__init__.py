@@ -1,56 +1,42 @@
+"""Policy framework for ToddlerBot robot control and behavior.
+
+This module provides the base infrastructure for implementing robot control policies,
+including support for various behavioral patterns such as walking, standing,
+manipulation, and teleoperation modes.
+
+The policy framework supports:
+- Unified interface for different control strategies
+- Smooth transitions between motor positions
+- Configurable preparation phases for policy initialization
+- Integration with both simulation and real robot hardware
+
+All policies inherit from BasePolicy and implement domain-specific
+control logic while maintaining consistent interfaces.
+"""
+
 from abc import ABC, abstractmethod
-from typing import Dict, List, Tuple, Type
+from typing import Dict, Tuple
 
 import numpy as np
 import numpy.typing as npt
 
-from toddlerbot.sim import Obs
+from toddlerbot.sim import BaseSim, Obs
 from toddlerbot.sim.robot import Robot
-from toddlerbot.utils.math_utils import interpolate
+from toddlerbot.utils.math_utils import get_action_traj
 from toddlerbot.utils.misc_utils import snake2camel
-
-# Global registry to store policy names and their corresponding classes
-policy_registry: Dict[str, Type["BasePolicy"]] = {}
-
-
-def get_policy_class(policy_name: str) -> Type["BasePolicy"]:
-    """Retrieves the policy class associated with the given policy name.
-
-    Args:
-        policy_name (str): The name of the policy to retrieve.
-
-    Returns:
-        Type[BasePolicy]: The class of the policy corresponding to the given name.
-
-    Raises:
-        ValueError: If the policy name is not found in the policy registry.
-    """
-    if policy_name not in policy_registry:
-        raise ValueError(f"Unknown policy: {policy_name}")
-
-    return policy_registry[policy_name]
-
-
-def get_policy_names() -> List[str]:
-    """Retrieves a list of policy names from the policy registry.
-
-    This function iterates over the keys in the policy registry and generates a list
-    of policy names. For each key, it adds the key itself and a modified version of
-    the key with the suffix '_fixed' to the list.
-
-    Returns:
-        List[str]: A list containing the original and modified policy names.
-    """
-    policy_names: List[str] = []
-    for key in policy_registry.keys():
-        policy_names.append(key)
-        policy_names.append(key + "_fixed")
-
-    return policy_names
 
 
 class BasePolicy(ABC):
-    """Base class for all policies."""
+    """Abstract base class for all robot control policies.
+
+    This class defines the common interface and shared functionality for robot
+    control policies. It handles initialization, motor group indexing,
+    preparation trajectories, and provides a consistent framework for
+    implementing different behavioral patterns.
+
+    All concrete policy implementations must inherit from this class and
+    implement the abstract step() method to define their specific control logic.
+    """
 
     @abstractmethod
     def __init__(
@@ -62,15 +48,17 @@ class BasePolicy(ABC):
         prep_duration: float = 2.0,
         n_steps_total: float = float("inf"),
     ):
-        """Initializes the class with robot configuration and control parameters.
+        """Initialize the policy with robot configuration and control parameters.
 
         Args:
-            name (str): The name of the robot or component.
-            robot (Robot): An instance of the Robot class containing robot specifications.
-            init_motor_pos (npt.NDArray[np.float32]): Initial positions of the robot's motors.
-            control_dt (float, optional): Time interval for control updates. Defaults to 0.02.
-            prep_duration (float, optional): Duration for preparation phase. Defaults to 2.0.
-            n_steps_total (float, optional): Total number of control steps. Defaults to infinity.
+            name: Identifier name for this policy instance.
+            robot: Robot configuration object containing joint and motor specifications.
+            init_motor_pos: Initial motor positions in radians as a float32 array.
+            control_dt: Control loop timestep in seconds. Defaults to 0.02.
+            prep_duration: Duration for preparation phase when transitioning from
+                current to default positions. Defaults to 2.0.
+            n_steps_total: Maximum number of control steps to execute. Defaults to
+                infinity for continuous operation.
         """
         self.name = name
         self.robot = robot
@@ -88,15 +76,11 @@ class BasePolicy(ABC):
             list(robot.default_joint_angles.values()), dtype=np.float32
         )
         self.motor_limits = np.array(
-            [robot.joint_limits[name] for name in robot.motor_ordering]
+            [robot.motor_limits[name] for name in robot.motor_ordering]
         )
         indices = np.arange(robot.nu)
-        motor_groups = np.array(
-            [robot.joint_groups[name] for name in robot.motor_ordering]
-        )
-        joint_groups = np.array(
-            [robot.joint_groups[name] for name in robot.joint_ordering]
-        )
+        motor_groups = np.array(robot.motor_groups)
+        joint_groups = np.array(robot.joint_groups)
         self.leg_motor_indices = indices[motor_groups == "leg"]
         self.leg_joint_indices = indices[joint_groups == "leg"]
         self.arm_motor_indices = indices[motor_groups == "arm"]
@@ -107,75 +91,45 @@ class BasePolicy(ABC):
         self.waist_joint_indices = indices[joint_groups == "waist"]
 
         self.prep_duration = 2.0
-        self.prep_time, self.prep_action = self.move(
-            -self.control_dt, init_motor_pos, self.default_motor_pos, self.prep_duration
+        self.prep_time, self.prep_action = get_action_traj(
+            0.0,
+            init_motor_pos,
+            self.default_motor_pos,
+            self.prep_duration,
+            self.control_dt,
         )
 
-    # Automatic registration of subclasses
-    def __init_subclass__(cls, policy_name: str = "", **kwargs):
-        """Initializes a subclass and registers it with a policy name.
-
-        Args:
-            policy_name (str): The name of the policy to register the subclass under. If not provided, the subclass will not be registered.
-            **kwargs: Additional keyword arguments passed to the superclass initializer.
-        """
-        super().__init_subclass__(**kwargs)
-        if len(policy_name) > 0:
-            policy_registry[policy_name] = cls
-
     def reset(self):
+        """Reset the policy state for a new episode or run.
+
+        This method is called to reinitialize the policy state when starting
+        a new control episode. Subclasses can override this method to implement
+        specific reset behavior.
+        """
         pass
 
     @abstractmethod
     def step(
-        self, obs: Obs, is_real: bool = False
+        self, obs: Obs, sim: BaseSim
     ) -> Tuple[Dict[str, float], npt.NDArray[np.float32]]:
-        pass
-
-    # duration: total length of the motion
-    # end_time: when motion should end, end time < time < duration will be static
-    def move(
-        self,
-        time_curr: float,
-        action_curr: npt.NDArray[np.float32],
-        action_next: npt.NDArray[np.float32],
-        duration: float,
-        end_time: float = 0.0,
-    ):
-        """Calculates the trajectory of an action over a specified duration, interpolating between current and next actions.
+        """Execute one control step of the policy.
 
         Args:
-            time_curr (float): The current time from which the trajectory starts.
-            action_curr (npt.NDArray[np.float32]): The current action state as a NumPy array.
-            action_next (npt.NDArray[np.float32]): The next action state as a NumPy array.
-            duration (float): The total duration over which the action should be interpolated.
-            end_time (float, optional): The time at the end of the duration where the action should remain constant. Defaults to 0.0.
+            obs: Current observation containing robot state information.
+            sim: Simulation or robot interface for sending control commands.
 
         Returns:
-            Tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]: A tuple containing the time steps and the corresponding interpolated positions.
+            A tuple containing:
+            - Dictionary mapping motor names to target positions
+            - Array of motor positions for all motors
         """
-        reset_time = np.linspace(
-            0,
-            duration,
-            int(duration / self.control_dt),
-            endpoint=False,
-            dtype=np.float32,
-        )
+        pass
 
-        reset_pos = np.zeros((len(reset_time), action_curr.shape[0]), dtype=np.float32)
-        for i, t in enumerate(reset_time):
-            if t < duration - end_time:
-                pos = interpolate(
-                    action_curr,
-                    action_next,
-                    duration - end_time,
-                    t,
-                )
-            else:
-                pos = action_next
+    def close(self, exp_folder_path: str = ""):
+        """Clean up resources and save any final data.
 
-            reset_pos[i] = pos
-
-        reset_time += time_curr + self.control_dt
-
-        return reset_time, reset_pos
+        Args:
+            exp_folder_path: Optional path to save experiment data or logs.
+                Defaults to empty string.
+        """
+        pass

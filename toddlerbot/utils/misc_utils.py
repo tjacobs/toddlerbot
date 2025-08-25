@@ -1,14 +1,25 @@
+"""Miscellaneous utility functions for the ToddlerBot framework.
+
+This module provides various helper functions for common operations including:
+- Logging with colored output and different severity levels
+- Function profiling and performance analysis
+- Asynchronous operation utilities
+- Data structure manipulation and serialization
+- File system operations and process management
+
+These utilities are used throughout the ToddlerBot codebase to provide
+consistent functionality for debugging, monitoring, and general operations.
+"""
+
 import ast
 import asyncio
 import functools
 import inspect
 import logging
 import os
-import re
 import subprocess
 import time
 from dataclasses import asdict, is_dataclass
-from datetime import datetime
 from typing import Any, Callable, TypeVar
 
 from colorama import Fore, init
@@ -123,7 +134,7 @@ def dump_profiling_data(prof_path: str = "profile_output.lprof"):
     txt_path = prof_path.replace(".lprof", ".txt")
     subprocess.run(f"python -m line_profiler {prof_path} > {txt_path}", shell=True)
 
-    log(f"Profile results saved to {txt_path}.", header="Profiler")
+    print(f"[Profiler] Profile results saved to {txt_path}.")
 
 
 def snake2camel(snake_str: str) -> str:
@@ -162,7 +173,6 @@ def set_seed(seed: int):
     Args:
         seed (int): The seed value to set. If -1, a random seed is generated.
     """
-    import os
     import random
 
     import numpy as np
@@ -171,7 +181,7 @@ def set_seed(seed: int):
     if seed == -1:
         seed = np.random.randint(0, 10000)
 
-    log(f"Setting seed: {seed}", header="Seed")
+    print(f"[Seed] Setting seed: {seed}")
 
     random.seed(seed)
     np.random.seed(seed)
@@ -241,36 +251,3 @@ def dataclass2dict(obj):
         }
     else:
         return {key: value for key, value in asdict(obj).items()}
-
-
-def find_latest_file_with_time_str(directory: str, file_prefix: str = "") -> str | None:
-    """
-    Finds the file with the latest timestamp (YYYYMMDD_HHMMSS) in the given directory,
-    for files ending with the specified suffix.
-
-    Args:
-        directory (str): Directory to search for files.
-        file_suffix (str): The suffix to match (e.g., '.pkl', '_updated.pkl').
-
-    Returns:
-        str | None: Full path of the latest file or None if no matching file is found.
-    """
-    pattern = re.compile(r".*" + re.escape(file_prefix) + r".*(\d{8}_\d{6}).*")
-
-    latest_file = None
-    latest_time = None
-
-    # Iterate through files in the directory
-    for file in os.listdir(directory):
-        match = pattern.search(file)  # Check if the file matches the pattern
-        if match:
-            # Extract the timestamp and parse it into a datetime object
-            timestamp_str = match.group(1)
-            file_time = datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S")
-
-            # Update the latest file if this timestamp is more recent
-            if latest_time is None or file_time > latest_time:
-                latest_time = file_time
-                latest_file = file
-
-    return os.path.join(directory, latest_file) if latest_file else None

@@ -3,6 +3,63 @@
 Assembly
 ========================
 
+.. important::
+   **1.0 to 2.0 Migration**: We're working on an interactive assembly manual with `tnkr.ai <https://www.tnkr.ai/>`_. 
+   Before the new assembly manual is ready, please refer to 2.0 overview videos, the onshape document and existing resources below.
+   Overall, we believe that 2.0 is easier to assemble and more user-friendly.
+
+
+2.0 Overview Videos
+-------------------
+
+.. raw:: html
+
+    <div style="display: flex; gap: 20px; justify-content: center; align-items: center;">
+        <!-- Left Column: YouTube Video -->
+        <div style="flex: 1;">
+            <iframe width="100%" height="400" src="https://www.youtube.com/embed/3w0I8UM7lwc" 
+                title="YouTube video player" frameborder="0" allowfullscreen>
+            </iframe>
+        </div>
+    </div>
+
+
+.. raw:: html
+
+    <div style="display: flex; gap: 20px; justify-content: center; align-items: center;">
+        <!-- Left Column: YouTube Video -->
+        <div style="flex: 1;">
+            <iframe width="100%" height="400" src="https://www.youtube.com/embed/pObzuLcKrmI" 
+                title="YouTube video player" frameborder="0" allowfullscreen>
+            </iframe>
+        </div>
+    </div>
+
+
+.. raw:: html
+
+    <div style="display: flex; gap: 20px; justify-content: center; align-items: center;">
+        <!-- Left Column: YouTube Video -->
+        <div style="flex: 1;">
+            <iframe width="100%" height="400" src="https://www.youtube.com/embed/k1DuXdaXvdU" 
+                title="YouTube video player" frameborder="0" allowfullscreen>
+            </iframe>
+        </div>
+    </div>
+
+
+.. raw:: html
+
+    <div style="display: flex; gap: 20px; justify-content: center; align-items: center;">
+        <!-- Left Column: YouTube Video -->
+        <div style="flex: 1;">
+            <iframe width="100%" height="400" src="https://www.youtube.com/embed/onsd8Y0W_do" 
+                title="YouTube video player" frameborder="0" allowfullscreen>
+            </iframe>
+        </div>
+    </div>
+
+
 Before you begin, rest assured that building a humanoid from scratch is entirely feasible, even if you have little experience with robotics. 
 In that case, you'll learn a lot throughout the process! In fact, two CS majors have already successfully built ToddlerBot from scratch.
 
@@ -10,7 +67,7 @@ To ensure a smooth and enjoyable assembly session, we provide three types of res
 
 #. **Assembly Manual**: A detailed step-by-step guide to help you through the assembly process.
 #. **Assembly Video**: The `YouTube playlist <https://www.youtube.com/playlist?list=PLX0JY1vogaVYRRxF5sH4IedZpfX7meuz0>`_ has videos that walk you through the assembly process.
-#. **Onshape**: The `online CAD document <https://cad.onshape.com/documents/ff1e767f256dd9c8abf2206a>`_ for your reference.
+#. **Onshape**: The `online CAD document <https://cad.onshape.com/documents/565bc33af293a651f66e88d2>`_ for your reference.
 
 The recommended assembly order follows the sequence of the sections below.
 

@@ -1,3 +1,5 @@
+"""Utility functions for dataset processing, video generation, and data normalization."""
+
 import os
 
 import cv2

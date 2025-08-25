@@ -47,8 +47,8 @@ The depth module uses [FoundationStereo](https://github.com/NVlabs/FoundationSte
    ```
 
    This will create:
-   - `toddlerbot/sensing/calibration_params.pkl`
-   - `toddlerbot/sensing/rectification_params.pkl`
+   - `toddlerbot/depth/params/calibration.pkl`
+   - `toddlerbot/depth/params/rectification.npz`
 
 ## Usage
 

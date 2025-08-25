@@ -1,10 +1,10 @@
+"""AprilTag detection example using stereo cameras."""
+
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 
 from toddlerbot.sensing.camera import AprilTagDetector, Camera
-
-# This script is for visualizing the AprilTag detection in real-time using two cameras.
 
 
 def visualize(ax, averaged_poses, T_left, T_right, frame_id):

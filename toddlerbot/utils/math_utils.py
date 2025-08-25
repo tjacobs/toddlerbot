@@ -1,11 +1,37 @@
+"""Mathematical utilities for signal processing, interpolation, and filtering.
+
+Provides functions for signal generation, trajectory interpolation, coordinate transforms,
+and various mathematical operations used throughout the robot control system.
+"""
+
 import math
 from dataclasses import is_dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
+from scipy.interpolate import interp1d
 from scipy.signal import chirp
 
-from toddlerbot.utils.array_utils import ArrayType
+from toddlerbot.utils.array_utils import ArrayType, R
 from toddlerbot.utils.array_utils import array_lib as np
+
+
+def get_local_vec(world_vec: ArrayType, world_quat: ArrayType) -> ArrayType:
+    """Transforms a world-frame vector to local frame using quaternion rotation.
+
+    Args:
+        world_vec: Vector in world coordinates.
+        world_quat: Quaternion rotation (w, x, y, z format).
+
+    Returns:
+        Vector transformed to local frame.
+    """
+    world_quat_xyzw = np.concatenate(
+        [world_quat[..., 1:], world_quat[..., :1]], axis=-1
+    )
+    world_rot = R.from_quat(world_quat_xyzw)
+    world_rot_inv = world_rot.inv()
+    # Rotate the vector
+    return world_rot_inv.apply(world_vec)
 
 
 def get_random_sine_signal_config(
@@ -153,307 +179,6 @@ def round_to_sig_digits(x: float, digits: int):
     return round(x, digits - int(math.floor(math.log10(abs(x)))) - 1)
 
 
-def quat2euler(quat: ArrayType, order: str = "wxyz") -> ArrayType:
-    """
-    Convert a quaternion to Euler angles (roll, pitch, yaw).
-
-    Args:
-        quat: Quaternion as [w, x, y, z] or [x, y, z, w].
-
-    Returns:
-        Euler angles as [roll, pitch, yaw].
-    """
-    if order == "xyzw":
-        x, y, z, w = quat
-    else:
-        w, x, y, z = quat
-
-    t0 = 2.0 * (w * x + y * z)
-    t1 = 1.0 - 2.0 * (x * x + y * y)
-    roll = np.arctan2(t0, t1)
-
-    t2 = 2.0 * (w * y - z * x)
-    t2 = np.clip(t2, -1.0, 1.0)
-    pitch = np.arcsin(t2)
-
-    t3 = 2.0 * (w * z + x * y)
-    t4 = 1.0 - 2.0 * (y * y + z * z)
-    yaw = np.arctan2(t3, t4)
-
-    return np.array([roll, pitch, yaw])
-
-
-def euler2quat(euler: ArrayType, order: str = "wxyz") -> ArrayType:
-    """
-    Convert Euler angles (roll, pitch, yaw) to a quaternion.
-
-    Args:
-        euler: Euler angles as [roll, pitch, yaw].
-        order: Output quaternion order, either "wxyz" or "xyzw".
-
-    Returns:
-        Quaternion as [w, x, y, z] or [x, y, z, w].
-    """
-    roll, pitch, yaw = euler
-
-    cy = np.cos(yaw * 0.5)
-    sy = np.sin(yaw * 0.5)
-    cp = np.cos(pitch * 0.5)
-    sp = np.sin(pitch * 0.5)
-    cr = np.cos(roll * 0.5)
-    sr = np.sin(roll * 0.5)
-
-    w = cr * cp * cy + sr * sp * sy
-    x = sr * cp * cy - cr * sp * sy
-    y = cr * sp * cy + sr * cp * sy
-    z = cr * cp * sy - sr * sp * cy
-
-    if order == "xyzw":
-        return np.array([x, y, z, w])
-    else:
-        return np.array([w, x, y, z])
-
-
-def mat2quat(mat: ArrayType, order: str = "wxyz") -> ArrayType:
-    """
-    Convert a 3x3 rotation matrix to a quaternion.
-
-    Args:
-        mat: 3x3 rotation matrix.
-        order: Order of the output quaternion, either "wxyz" or "xyzw".
-
-    Returns:
-        Quaternion as [w, x, y, z] or [x, y, z, w].
-    """
-    # Extract matrix elements
-    m00, m01, m02 = mat[0, 0], mat[0, 1], mat[0, 2]
-    m10, m11, m12 = mat[1, 0], mat[1, 1], mat[1, 2]
-    m20, m21, m22 = mat[2, 0], mat[2, 1], mat[2, 2]
-
-    # Calculate the trace of the matrix
-    trace = m00 + m11 + m22
-
-    if trace > 0:
-        s = 0.5 / np.sqrt(trace + 1.0)
-        w = 0.25 / s
-        x = (m21 - m12) * s
-        y = (m02 - m20) * s
-        z = (m10 - m01) * s
-    elif (m00 > m11) and (m00 > m22):
-        s = 2.0 * np.sqrt(1.0 + m00 - m11 - m22)
-        w = (m21 - m12) / s
-        x = 0.25 * s
-        y = (m01 + m10) / s
-        z = (m02 + m20) / s
-    elif m11 > m22:
-        s = 2.0 * np.sqrt(1.0 + m11 - m00 - m22)
-        w = (m02 - m20) / s
-        x = (m01 + m10) / s
-        y = 0.25 * s
-        z = (m12 + m21) / s
-    else:
-        s = 2.0 * np.sqrt(1.0 + m22 - m00 - m11)
-        w = (m10 - m01) / s
-        x = (m02 + m20) / s
-        y = (m12 + m21) / s
-        z = 0.25 * s
-
-    # Return quaternion in specified order
-    if order == "xyzw":
-        return np.array([x, y, z, w])
-    else:
-        return np.array([w, x, y, z])
-
-
-def quat2mat(quat: ArrayType, order: str = "wxyz") -> ArrayType:
-    """
-    Convert a quaternion to a 3x3 rotation matrix.
-
-    Args:
-        quat: Quaternion as [w, x, y, z] or [x, y, z, w].
-        order: Order of the input quaternion, either "wxyz" or "xyzw".
-
-    Returns:
-        A 3x3 rotation matrix.
-    """
-    # Extract quaternion components based on order
-    if order == "xyzw":
-        x, y, z, w = quat
-    else:
-        w, x, y, z = quat
-
-    # Calculate the elements of the rotation matrix
-    xx, yy, zz = x * x, y * y, z * z
-    xy, xz, yz = x * y, x * z, y * z
-    wx, wy, wz = w * x, w * y, w * z
-
-    mat = np.array(
-        [
-            [1.0 - 2.0 * (yy + zz), 2.0 * (xy - wz), 2.0 * (xz + wy)],
-            [2.0 * (xy + wz), 1.0 - 2.0 * (xx + zz), 2.0 * (yz - wx)],
-            [2.0 * (xz - wy), 2.0 * (yz + wx), 1.0 - 2.0 * (xx + yy)],
-        ]
-    )
-
-    return mat
-
-
-def euler2mat(euler: ArrayType, order: str = "zyx") -> ArrayType:
-    """
-    Convert Euler angles (roll, pitch, yaw) to a 3x3 rotation matrix.
-
-    Args:
-        euler: Euler angles as [roll, pitch, yaw].
-
-    Returns:
-        A 3x3 rotation matrix.
-    """
-    roll, pitch, yaw = euler
-
-    # Compute individual rotation matrices
-    cr, sr = np.cos(roll), np.sin(roll)
-    cp, sp = np.cos(pitch), np.sin(pitch)
-    cy, sy = np.cos(yaw), np.sin(yaw)
-
-    # Rotation matrix for each axis
-    R_roll = np.array([[1, 0, 0], [0, cr, -sr], [0, sr, cr]])
-
-    R_pitch = np.array([[cp, 0, sp], [0, 1, 0], [-sp, 0, cp]])
-
-    R_yaw = np.array([[cy, -sy, 0], [sy, cy, 0], [0, 0, 1]])
-
-    if order == "xyz":
-        R = R_roll @ R_pitch @ R_yaw
-    elif order == "xzy":
-        R = R_roll @ R_yaw @ R_pitch
-    elif order == "yxz":
-        R = R_pitch @ R_roll @ R_yaw
-    elif order == "yzx":
-        R = R_pitch @ R_yaw @ R_roll
-    elif order == "zxy":
-        R = R_yaw @ R_roll @ R_pitch
-    elif order == "zyx":
-        R = R_yaw @ R_pitch @ R_roll
-    else:
-        raise ValueError(
-            "Invalid order. Must be one of 'xyz', 'xzy', 'yxz', 'yzx', 'zxy', 'zyx'."
-        )
-
-    return R
-
-
-def mat2euler(mat: ArrayType, order: str = "zyx") -> ArrayType:
-    """
-    Convert a 3x3 rotation matrix to Euler angles (roll, pitch, yaw).
-
-    Args:
-        mat: 3x3 rotation matrix.
-
-    Returns:
-        Euler angles as [roll, pitch, yaw].
-    """
-    if order == "zyx":
-        # ZYX order (yaw, pitch, roll)
-        if np.isclose(mat[2, 0], -1.0):
-            # Gimbal lock case (pitch = 90 degrees)
-            pitch = np.pi / 2
-            roll = np.arctan2(mat[0, 1], mat[0, 2])
-            yaw = 0
-        elif np.isclose(mat[2, 0], 1.0):
-            # Gimbal lock case (pitch = -90 degrees)
-            pitch = -np.pi / 2
-            roll = np.arctan2(-mat[0, 1], -mat[0, 2])
-            yaw = 0
-        else:
-            # General case
-            pitch = np.arcsin(-mat[2, 0])
-            roll = np.arctan2(mat[2, 1] / np.cos(pitch), mat[2, 2] / np.cos(pitch))
-            yaw = np.arctan2(mat[1, 0] / np.cos(pitch), mat[0, 0] / np.cos(pitch))
-
-    elif order == "xyz":
-        # XYZ order (roll, pitch, yaw)
-        if np.isclose(mat[0, 2], -1.0):
-            # Gimbal lock case (pitch = 90 degrees)
-            pitch = np.pi / 2
-            yaw = np.arctan2(mat[1, 0], mat[1, 1])
-            roll = 0
-        elif np.isclose(mat[0, 2], 1.0):
-            # Gimbal lock case (pitch = -90 degrees)
-            pitch = -np.pi / 2
-            yaw = np.arctan2(-mat[1, 0], -mat[1, 1])
-            roll = 0
-        else:
-            # General case
-            pitch = np.arcsin(mat[0, 2])
-            yaw = np.arctan2(-mat[0, 1] / np.cos(pitch), mat[0, 0] / np.cos(pitch))
-            roll = np.arctan2(-mat[1, 2] / np.cos(pitch), mat[2, 2] / np.cos(pitch))
-
-    else:
-        raise ValueError("Invalid order. Supported orders are 'zyx' and 'xyz'.")
-
-    return np.array([roll, pitch, yaw])
-
-
-def quat_inv(quat: ArrayType, order: str = "wxyz") -> ArrayType:
-    """Calculates the inverse of a quaternion.
-
-    Args:
-        quat (ArrayType): A quaternion represented as an array of four elements.
-        order (str, optional): The order of the quaternion components. Either "wxyz" or "xyzw". Defaults to "wxyz".
-
-    Returns:
-        ArrayType: The inverse of the input quaternion.
-    """
-    if order == "xyzw":
-        x, y, z, w = quat
-    else:
-        w, x, y, z = quat
-
-    norm = w**2 + x**2 + y**2 + z**2
-    return np.array([w, -x, -y, -z]) / np.sqrt(norm)
-
-
-def quat_mult(q1: ArrayType, q2: ArrayType, order: str = "wxyz") -> ArrayType:
-    """Multiplies two quaternions and returns the resulting quaternion.
-
-    Args:
-        q1 (ArrayType): The first quaternion, represented as an array of four elements.
-        q2 (ArrayType): The second quaternion, represented as an array of four elements.
-        order (str, optional): The order of quaternion components, either "wxyz" or "xyzw". Defaults to "wxyz".
-
-    Returns:
-        ArrayType: The resulting quaternion from the multiplication, in the specified order.
-    """
-    if order == "wxyz":
-        w1, x1, y1, z1 = q1
-        w2, x2, y2, z2 = q2
-    else:
-        x1, y1, z1, w1 = q1
-        x2, y2, z2, w2 = q2
-
-    w = w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2
-    x = w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2
-    y = w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2
-    z = w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
-    return np.array([w, x, y, z])
-
-
-def rotate_vec(vector: ArrayType, quat: ArrayType):
-    """Rotate a vector using a quaternion.
-
-    Args:
-        vector (ArrayType): The vector to be rotated.
-        quat (ArrayType): The quaternion representing the rotation.
-
-    Returns:
-        ArrayType: The rotated vector.
-    """
-    v = np.array([0.0] + list(vector))
-    q_inv = quat_inv(quat)
-    v_rotated = quat_mult(quat_mult(quat, v), q_inv)
-    return v_rotated[1:]
-
-
 def exponential_moving_average(
     alpha: ArrayType | float,
     current_value: ArrayType | float,
@@ -476,7 +201,7 @@ def exponential_moving_average(
     return alpha * current_value + (1 - alpha) * previous_filtered_value
 
 
-# Recursive Butterworth filter implementation in JAX
+# Recursive Butterworth filter implementation
 def butterworth(
     b: ArrayType,
     a: ArrayType,
@@ -484,25 +209,35 @@ def butterworth(
     past_inputs: ArrayType,
     past_outputs: ArrayType,
 ) -> Tuple[ArrayType, ArrayType, ArrayType]:
-    """
-    Apply Butterworth filter to a single data point `x` using filter coefficients `b` and `a`.
-    State holds past input and output values to maintain continuity.
+    """Apply Butterworth filter to input data using filter coefficients.
+
+    Supports both scalar and multi-dimensional inputs.
 
     Args:
-        b: Filter numerator coefficients (b_0, b_1, ..., b_m)
-        a: Filter denominator coefficients (a_0, a_1, ..., a_n) with a[0] = 1
-        x: Current input value
-        state: Tuple of (past_inputs, past_outputs)
+        b: Filter numerator coefficients (b0, b1, ..., bm).
+        a: Filter denominator coefficients (a0, a1, ..., an) with a[0] = 1.
+        x: Current input value (scalar or array).
+        past_inputs: Past input values with shape (filter_order-1, x.shape).
+        past_outputs: Past output values with shape (filter_order-1, x.shape).
 
     Returns:
-        y: Filtered output
-        new_state: Updated state to use in the next step
+        tuple: A tuple containing:
+            - y: Filtered output with same shape as x
+            - new_past_inputs: Updated past inputs
+            - new_past_outputs: Updated past outputs
     """
+    # Ensure x is at least 1D for consistent operations
+    x = np.atleast_1d(x)
+
     # Compute the current output y[n] based on the difference equation
+    # For multi-dimensional inputs, broadcast coefficients appropriately
+    b_expanded = b.reshape(-1, *([1] * x.ndim))
+    a_expanded = a.reshape(-1, *([1] * x.ndim))
+
     y = (
-        b[0] * x
-        + np.sum(b[1:] * past_inputs, axis=0)
-        - np.sum(a[1:] * past_outputs, axis=0)
+        b_expanded[0] * x
+        + np.sum(b_expanded[1:] * past_inputs, axis=0)
+        - np.sum(a_expanded[1:] * past_outputs, axis=0)
     )
 
     # Update the state with the new input/output for the next iteration
@@ -624,11 +359,59 @@ def interpolate_action(
     return interpolate(p_start, p_end, duration, t - time_arr[idx], interp_type)
 
 
+def get_action_traj(
+    time_curr: float,
+    action_curr: ArrayType,
+    action_next: ArrayType,
+    duration: float,
+    control_dt: float,
+    end_time: float = 0.0,
+):
+    """Calculates the trajectory of an action over a specified duration, interpolating between current and next actions.
+
+    Args:
+        time_curr (float): The current time from which the trajectory starts.
+        action_curr (ArrayType): The current action state as a NumPy array.
+        action_next (ArrayType): The next action state as a NumPy array.
+        duration (float): The total duration over which the action should be interpolated.
+        end_time (float, optional): The time at the end of the duration where the action should remain constant. Defaults to 0.0.
+
+    Returns:
+        Tuple[ArrayType, ArrayType]: A tuple containing the time steps and the corresponding interpolated positions.
+    """
+    action_time = np.linspace(
+        0,
+        duration,
+        int(duration / control_dt),
+        endpoint=True,
+        dtype=np.float32,
+    )
+
+    action_traj = np.zeros((len(action_time), action_curr.shape[0]), dtype=np.float32)
+    for i, t in enumerate(action_time):
+        if t < duration - end_time:
+            pos = interpolate(
+                action_curr,
+                action_next,
+                duration - end_time,
+                t,
+            )
+        else:
+            pos = action_next
+
+        action_traj[i] = pos
+
+    action_time += time_curr
+
+    return action_time, action_traj
+
+
 def resample_trajectory(
-    trajectory: List[Tuple[float, Dict[str, float]]],
-    desired_interval: float = 0.01,
+    time_arr: ArrayType,
+    trajectory: ArrayType,
+    desired_interval: float = 0.02,
     interp_type: str = "linear",
-) -> List[Tuple[float, Dict[str, float]]]:
+) -> ArrayType:
     """Resamples a trajectory of joint angles over time to a specified time interval using interpolation.
 
     Args:
@@ -639,28 +422,17 @@ def resample_trajectory(
     Returns:
         List[Tuple[float, Dict[str, float]]]: A resampled list of tuples with timestamps and interpolated joint angles.
     """
-    resampled_trajectory: List[Tuple[float, Dict[str, float]]] = []
-    for i in range(len(trajectory) - 1):
-        t0, joint_angles_0 = trajectory[i]
-        t1, joint_angles_1 = trajectory[i + 1]
-        duration = t1 - t0
+    # New uniform time array
+    new_time_arr = np.arange(time_arr[0], time_arr[-1], desired_interval)
 
-        # Add an epsilon to the desired interval to avoid floating point errors
-        if duration > desired_interval + 1e-6:
-            # More points needed, interpolate
-            num_steps = int(duration / desired_interval)
-            for j in range(num_steps):
-                t = j * desired_interval
-                interpolated_joint_angles: Dict[str, float] = {}
-                for joint_name, p_start in joint_angles_0.items():
-                    p_end = joint_angles_1[joint_name]
-                    p_interp = interpolate(p_start, p_end, duration, t, interp_type)
-                    interpolated_joint_angles[joint_name] = float(p_interp)
-                resampled_trajectory.append((t0 + t, interpolated_joint_angles))
-        else:
-            # Interval is fine, keep the original point
-            resampled_trajectory.append((t0, joint_angles_0))
+    # Interpolate
+    interpolator = interp1d(
+        time_arr,
+        trajectory,
+        kind=interp_type,
+        axis=0,
+        fill_value="extrapolate",  # or 'bounds_error=False' if you want to be safe
+    )
+    new_traj = interpolator(new_time_arr)
 
-    resampled_trajectory.append(trajectory[-1])
-
-    return resampled_trajectory
+    return new_time_arr, new_traj

@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["scikit-build-core", "pybind11"]
+build-backend = "scikit_build_core.build"
 
 [project]
 name = "toddlerbot"
-version = "0.1.0"
+version = "0.2.0"
 description = "The software stack of ToddlerBot."
 authors = [
     { name = "Haochen Shi", email = "hshi74@stanford.edu" },
@@ -16,13 +16,15 @@ requires-python = ">=3.10"
 
 dependencies = [
     "adafruit-circuitpython-bno08x",
+    "brax",
     "cmaes",
     "colorama",
     "control==0.9.4",
     "diffusers==0.30.3",
-    "dynamixel-sdk==3.7.31",
     "gdown",
     "gin-config",
+    "jax==0.4.28",
+    "jaxlib==0.4.28",
     "joblib",
     "line_profiler",
     "lz4",
@@ -31,7 +33,8 @@ dependencies = [
     "moviepy==1.0.3",
     "mypy",
     "numpy==1.26.4",
-    "onshape-to-robot==0.3.24",
+    "onnxruntime",
+    "onshape-to-robot==1.7.2",
     "open3d",
     "openai[realtime]",
     "opencv-python==4.9.0.80",
@@ -40,19 +43,17 @@ dependencies = [
     "psycopg2-binary",
     "pupil_apriltags",
     "pygame",
-    "pymunk",
     "pytest",
     "pyserial",
     "PySide6",
+    "rsl-rl-lib==2.3.3",
     "scipy",
     "seaborn",
     "setuptools==75.6.0",
-    "sounddevice",
-    "soundfile",
+    "sounddevice", 
     "soxr",
     "textual",
     "tqdm",
-    "transforms3d",
     "wandb",
     "zmq"
 ]
@@ -65,8 +66,9 @@ macos = ["torch==2.3.1", "torchvision==0.18.1"]
 windows = ["torch==2.3.1", "torchvision==0.18.1"]
 jetson = ["Jetson.GPIO", "pyaudio", "pydub"]
 
-[tool.setuptools.packages.find]
-where = ["."]
+[tool.scikit-build]
+wheel.packages = ["toddlerbot"]  # builds C++ extensions into this package
+build.verbose = true             # optional, for debugging
 
 [tool.sphinx]
 build-dir = "docs/_build"

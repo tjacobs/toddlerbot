@@ -1,18 +1,22 @@
+"""MuJoCo utilities for visualization, rendering, and recording.
+
+Provides classes for interactive viewing, multi-camera video recording,
+and basic rendering functionality for MuJoCo simulations.
+"""
+
 import os
 import pickle
-import time
 import warnings
 from typing import Any, Dict, List
 
 import cv2
 import matplotlib.pyplot as plt
-import mediapy as media
+import moviepy.editor as mpy
 import mujoco
 import mujoco.rollout
 import mujoco.viewer
 import numpy as np
 import numpy.typing as npt
-from moviepy.editor import VideoFileClip, clips_array
 
 from toddlerbot.sim.robot import Robot
 
@@ -66,20 +70,21 @@ class MuJoCoViewer:
         self.model = model
         self.viewer = mujoco.viewer.launch_passive(model, data)
 
-        self.foot_names = [
-            f"{self.robot.foot_name}_collision",
-            f"{self.robot.foot_name}_2_collision",
-        ]
-        foot_geom_size = np.array(self.model.geom(self.foot_names[0]).size)
-        # Define the local coordinates of the bounding box corners
-        self.local_bbox_corners = np.array(
-            [
-                [0.0, -foot_geom_size[1], -foot_geom_size[2]],
-                [0.0, -foot_geom_size[1], foot_geom_size[2]],
-                [0.0, foot_geom_size[1], foot_geom_size[2]],
-                [0.0, foot_geom_size[1], -foot_geom_size[2]],
+        if self.robot.foot_name:
+            self.foot_names = [
+                f"left_{self.robot.foot_name}_collision",
+                f"right_{self.robot.foot_name}_collision",
             ]
-        )
+            foot_geom_size = np.array(self.model.geom(self.foot_names[0]).size)
+            # Define the local coordinates of the bounding box corners
+            self.local_bbox_corners = np.array(
+                [
+                    [0.0, -foot_geom_size[1], -foot_geom_size[2]],
+                    [0.0, -foot_geom_size[1], foot_geom_size[2]],
+                    [0.0, foot_geom_size[1], foot_geom_size[2]],
+                    [0.0, foot_geom_size[1], -foot_geom_size[2]],
+                ]
+            )
 
         # self.path_frame_mid = model.body("path_frame").mocapid[0]
 
@@ -98,7 +103,7 @@ class MuJoCoViewer:
             self.viewer.user_scn.ngeom = 0
             if "com" in vis_flags:
                 self.visualize_com(data)
-            if "support_poly" in vis_flags:
+            if self.robot.foot_name and "support_poly" in vis_flags:
                 self.visualize_support_poly(data)
             # if "path_frame" in vis_flags:
             #     self.visualize_path_frame(data)
@@ -227,6 +232,8 @@ class MuJoCoRenderer:
         """
         self.model = model
         self.renderer = mujoco.Renderer(model, height=height, width=width)
+        self.scene_option = mujoco.MjvOption()
+        self.scene_option.flags[mujoco.mjtVisFlag.mjVIS_CONTACTPOINT] = 1
         self.anim_data: Dict[str, Any] = {}
         self.qpos_data: List[Any] = []
         self.qvel_data: List[Any] = []
@@ -250,7 +257,7 @@ class MuJoCoRenderer:
         exp_folder_path: str,
         dt: float,
         render_every: int,
-        name: str = "mujoco.mp4",
+        name: str = "eval.mp4",
         dump_data: bool = False,
     ):
         """Saves a recording of the simulation from multiple camera angles and optionally dumps animation data.
@@ -259,7 +266,7 @@ class MuJoCoRenderer:
             exp_folder_path (str): The path to the folder where the recording and data will be saved.
             dt (float): The time step duration for rendering frames.
             render_every (int): The interval at which frames are rendered.
-            name (str, optional): The name of the final video file. Defaults to "mujoco.mp4".
+            name (str, optional): The name of the final video file. Defaults to "eval.mp4".
             dump_data (bool, optional): If True, dumps the animation data to a pickle file. Defaults to False.
         """
         if dump_data:
@@ -268,10 +275,9 @@ class MuJoCoRenderer:
                 pickle.dump(self.anim_data, f)
 
         # Define paths for each camera's video
-        video_paths: List[str] = []
+        camera_clips = []
         # Render and save videos for each camera
         for camera in ["perspective", "side", "top", "front"]:
-            video_path = os.path.join(exp_folder_path, f"{camera}.mp4")
             video_frames: List[npt.NDArray[np.float32]] = []
             for qpos, qvel in zip(
                 self.qpos_data[::render_every], self.qvel_data[::render_every]
@@ -279,21 +285,28 @@ class MuJoCoRenderer:
                 d = mujoco.MjData(self.model)
                 d.qpos, d.qvel = qpos, qvel
                 mujoco.mj_forward(self.model, d)
-                self.renderer.update_scene(d, camera=camera)
+                self.renderer.update_scene(
+                    d, camera=camera, scene_option=self.scene_option
+                )
                 video_frames.append(self.renderer.render())
 
-            media.write_video(video_path, video_frames, fps=1.0 / dt / render_every)
-            video_paths.append(video_path)
-
-        # Delay to ensure the video files are fully written
-        time.sleep(1)
+            video = mpy.concatenate_videoclips(
+                [
+                    mpy.ImageClip(f).set_duration(dt * render_every)
+                    for f in video_frames
+                ],
+                method="compose",
+            )
+            camera_clips.append(video)
 
         # Load the video clips using moviepy
-        clips = [VideoFileClip(path) for path in video_paths]
-        # Arrange the clips in a 2x2 grid
-        final_video = clips_array([[clips[0], clips[1]], [clips[2], clips[3]]])
+        final_video = mpy.clips_array(
+            [[camera_clips[0], camera_clips[1]], [camera_clips[2], camera_clips[3]]]
+        )
         # Save the final concatenated video
-        final_video.write_videofile(os.path.join(exp_folder_path, name))
+        final_video.write_videofile(
+            os.path.join(exp_folder_path, name), fps=1 / dt / render_every
+        )
 
     def anim_pose_callback(self, data: Any):
         """Processes animation pose data and updates the animation data dictionary.

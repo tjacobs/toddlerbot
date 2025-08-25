@@ -9,6 +9,7 @@ Subpackages
 
    toddlerbot.actuation
    toddlerbot.algorithms
+   toddlerbot.depth
    toddlerbot.descriptions
    toddlerbot.locomotion
    toddlerbot.manipulation

@@ -11,7 +11,7 @@ Run the following command to start the keyframe animation tool:
 
 .. code::
 
-   toddlerbot/tools/edit_keyframe.py --task <task_name>
+   toddlerbot/tools/edit_keyframe.py --task <task_name> --run-name <run_name>
 
 You should see the following GUI:
 

@@ -1,36 +1,43 @@
+"""Test speaker functionality by downloading and playing audio.
+
+This module tests the speaker system by downloading an audio file, resampling it
+to the correct sample rate, and playing it through the ToddlerBot speaker.
+"""
+
+import numpy as np
 import requests
 import sounddevice as sd
-import soundfile as sf
 import soxr
+from pydub import AudioSegment
 
 from toddlerbot.sensing.speaker import Speaker
 
-# This script is used to download an audio file, resample it to 44100 Hz, and play it back using the speaker on Jetson.
-
 if __name__ == "__main__":
     # URL of the audio file (Replace with the actual URL)
-    audio_url = (
-        "https://www.cs.uic.edu/~troy/spring09/cs101/SoundFiles/BabyElephantWalk60.wav"
-    )
-
-    # Download the audio file
-    audio_path = "/tmp/downloaded_audio.wav"
+    # Download the MP3
+    audio_url = "https://www.soundjay.com/free-music/midnight-ride-01a.mp3"
+    audio_path = "/tmp/downloaded_audio.mp3"
 
     print("Downloading audio file...")
     response = requests.get(audio_url)
-    with open(audio_path, "wb") as file:
-        file.write(response.content)
-
+    with open(audio_path, "wb") as f:
+        f.write(response.content)
     print(f"Audio downloaded to {audio_path}")
 
-    # Load the downloaded audio file
-    data, samplerate = sf.read(audio_path)
+    # Load MP3 with pydub
+    song = AudioSegment.from_mp3(audio_path)
 
-    # Resample data to 44100 Hz if needed
+    # Convert to NumPy float32 array
+    samples = np.array(song.get_array_of_samples()).astype(np.float32) / (1 << 15)
+    if song.channels == 2:
+        samples = samples.reshape((-1, 2))
+    samplerate = song.frame_rate
+
+    # Resample to 44100 Hz
     new_samplerate = 44100
-    data_resampled = soxr.resample(data, samplerate, new_samplerate)
+    data_resampled = soxr.resample(samples, samplerate, new_samplerate)
 
-    # Play the resampled audio using the UACDemo device
+    # Play
     speaker = Speaker()
     sd.play(data_resampled, device=speaker.device)
     sd.wait()
