@@ -1,3 +1,5 @@
+"""Teleoperation interface for robot control."""
+
 import argparse
 import time
 
@@ -5,7 +7,6 @@ from tqdm import tqdm
 
 from toddlerbot.tools.joystick import Joystick
 from toddlerbot.utils.comm_utils import ZMQMessage, ZMQNode
-from toddlerbot.utils.misc_utils import log
 
 # This script is used to teleoperate the robot using a joystick. Note that this
 # script is not for teleoperated data collection, instead it is for
@@ -24,9 +25,8 @@ def main(ip: str):
     zmq = ZMQNode(type="sender", ip=ip)
     joystick = Joystick()
 
-    header_name = "Teleoperation"
     p_bar = tqdm(desc="Running the teleoperation")
-    start_time = time.time()
+    start_time = time.monotonic()
     step_idx = 0
     time_until_next_step = 0.0
     control_dt = 0.02
@@ -52,7 +52,7 @@ def main(ip: str):
                         is_button_pressed = False  # Reset button pressed state
 
             # compile data to send to follower
-            msg = ZMQMessage(time=time.time(), control_inputs=control_inputs)
+            msg = ZMQMessage(time=time.monotonic(), control_inputs=control_inputs)
             # print(f"Sending: {msg}")
             zmq.send_msg(msg)
 
@@ -62,7 +62,7 @@ def main(ip: str):
             if step_idx % p_bar_steps == 0:
                 p_bar.update(p_bar_steps)
 
-            step_end = time.time()
+            step_end = time.monotonic()
 
             time_until_next_step = start_time + control_dt * step_idx - step_end
             # print(f"time_until_next_step: {time_until_next_step * 1000:.2f} ms")
@@ -70,7 +70,7 @@ def main(ip: str):
                 time.sleep(time_until_next_step)
 
     except KeyboardInterrupt:
-        log("KeyboardInterrupt recieved. Closing...", header=header_name)
+        print("KeyboardInterrupt recieved. Closing...")
 
     finally:
         p_bar.close()

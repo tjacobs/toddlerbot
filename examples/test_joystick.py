@@ -1,6 +1,6 @@
-import pygame
+"""Joystick input testing using Pygame."""
 
-# Test script to read joystick inputs using Pygame
+import pygame
 
 if __name__ == "__main__":
     # Initialize Pygame

@@ -1,3 +1,5 @@
+"""Extract arm pose data from raw teleop datasets for RL training perturbation."""
+
 import argparse
 import os
 
@@ -7,8 +9,6 @@ from tqdm import tqdm
 
 from toddlerbot.sim.robot import Robot
 from toddlerbot.visualization.vis_plot import plot_teleop_dataset
-
-# This script processes raw data to create a arm pose dataset to perturb the RL training.
 
 
 def process_raw_dataset(
@@ -110,7 +110,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--robot",
         type=str,
-        default="toddlerbot",
+        default="toddlerbot_2xc",
         help="The name of the robot. Need to match the name in descriptions.",
         choices=["toddlerbot", "toddlerbot_gripper"],
     )

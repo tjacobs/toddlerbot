@@ -1,9 +1,16 @@
+"""Utility functions for depth processing, point cloud conversion, and stereo rectification.
+
+This module provides core utilities for depth map processing including conversion
+to point clouds, stereo rectification, disparity visualization, and image padding.
+"""
+
 import cv2
 import numpy as np
 import open3d as o3d
 
 
 def to_open3d_Cloud(points, colors=None, normals=None):
+    """Convert point arrays to Open3D PointCloud with optional colors and normals."""
     cloud = o3d.geometry.PointCloud()
     cloud.points = o3d.utility.Vector3dVector(points.astype(np.float64))
     if colors is not None:
@@ -16,6 +23,7 @@ def to_open3d_Cloud(points, colors=None, normals=None):
 
 
 def depth_to_xyzmap(depth: np.ndarray, K, uvs: np.ndarray = None, zmin=0.0):
+    """Convert depth map to 3D coordinate map using camera intrinsics."""
     H, W = depth.shape[:2]
     if uvs is None:
         vs, us = np.meshgrid(
@@ -82,6 +90,7 @@ def vis_disparity(
 
 
 def get_rectification_maps(calib_params, rec_params, image_size):
+    """Generate stereo rectification maps from calibration parameters."""
     K1, D1, K2, D2, _, _ = (
         calib_params["K1"],
         calib_params["D1"],
@@ -109,10 +118,7 @@ def get_rectification_maps(calib_params, rec_params, image_size):
 
 
 def pad_images_np(img0, img1, divis_by=32):
-    """
-    Pads both images so that height and width are divisible by 'divis_by'.
-    The padding is applied to the bottom and right sides.
-    """
+    """Pad stereo image pair to be divisible by specified value."""
     _, _, h, w = img0.shape
     new_h = ((h + divis_by - 1) // divis_by) * divis_by
     new_w = ((w + divis_by - 1) // divis_by) * divis_by
@@ -129,10 +135,7 @@ def pad_images_np(img0, img1, divis_by=32):
 
 
 def unpad_image_np(img, pad_shape, original_shape):
-    """
-    Removes the padding from an image.
-    Assumes padding was applied to the bottom and right sides.
-    """
+    """Remove padding from image to restore original dimensions."""
     pad_h, pad_w = pad_shape
     H, W = original_shape
     return img[:, :, :H, :W]

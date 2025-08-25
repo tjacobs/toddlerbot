@@ -1,3 +1,9 @@
+"""Dataset utilities for logging and saving teleoperation data.
+
+Provides data logging functionality for capturing and persisting teleoperation episodes
+to compressed files.
+"""
+
 import os
 import shutil
 from dataclasses import dataclass, fields

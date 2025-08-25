@@ -1,13 +1,21 @@
 toddlerbot.sim package
 ======================
 
+Subpackages
+-----------
+
+.. toctree::
+   :maxdepth: 4
+
+   toddlerbot.sim.terrain
+
 Submodules
 ----------
 
-toddlerbot.sim.mujoco\_control module
--------------------------------------
+toddlerbot.sim.motor\_control module
+------------------------------------
 
-.. automodule:: toddlerbot.sim.mujoco_control
+.. automodule:: toddlerbot.sim.motor_control
    :members:
    :undoc-members:
    :show-inheritance:
@@ -51,3 +59,4 @@ Module contents
    :members:
    :undoc-members:
    :show-inheritance:
+   :no-index:

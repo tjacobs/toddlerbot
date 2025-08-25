@@ -1,17 +1,9 @@
-import os
-import argparse
-
-import cv2
-import matplotlib.pyplot as plt
-import numpy as np
-import open3d as o3d
-
-"""
-Depth Comparison Script
+"""Depth Comparison Script
 
 This script compares depth maps and point clouds between ground truth and prediction results.
 
-Expected folder structure:
+Expected folder structure::
+
     results/
     ├── depth_blake_0529_fs_480x640_object/  # Ground truth folder
     │   ├── 10_depth.npy                     # Depth map files
@@ -25,9 +17,11 @@ Expected folder structure:
 Filename format:
     - Depth maps: {frame_num}_depth.npy
     - Point clouds: {frame_num}_pcd.ply
-    where frame_num is an integer (e.g., 10, 20, 30, etc.)
 
-Usage examples:
+where frame_num is an integer (e.g., 10, 20, 30, etc.)
+
+Usage examples::
+
     # Compare frame 10 between two depth result folders
     python test_compare_depth.py --gt-folder results/depth_blake_0529_fs_480x640_object --pred-folder results/depth_blake_0529_fs_96x128_object --frame 10
 
@@ -35,8 +29,17 @@ Usage examples:
     python test_compare_depth.py --gt-folder results/gt_folder --pred-folder results/pred_folder --frame 10 --zmax 2000
 """
 
+import argparse
+import os
+
+import cv2
+import matplotlib.pyplot as plt
+import numpy as np
+import open3d as o3d
+
 
 def load_point_cloud(path, voxel_size=None):
+    """Load and optionally downsample a point cloud."""
     pcd = o3d.io.read_point_cloud(path)
     if voxel_size:
         pcd = pcd.voxel_down_sample(voxel_size)

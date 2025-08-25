@@ -1,3 +1,5 @@
+"""System identification tool for robot parameter estimation."""
+
 import argparse
 import json
 import os
@@ -12,10 +14,9 @@ import optuna
 from optuna.logging import _get_library_root_logger
 
 from toddlerbot.sim import Obs
-from toddlerbot.sim.mujoco_control import MotorController
+from toddlerbot.sim.motor_control import MotorController
 from toddlerbot.sim.mujoco_sim import MuJoCoSim
 from toddlerbot.sim.robot import Robot
-from toddlerbot.utils.misc_utils import log
 from toddlerbot.visualization.vis_plot import (
     plot_joint_tracking,
     plot_joint_tracking_frequency,
@@ -329,11 +330,7 @@ def optimize_parameters(
         callbacks=[partial(early_stop_check, early_stopping_rounds=early_stop_rounds)],
     )
 
-    log(
-        f"Best parameters: {study.best_params}; best value: {study.best_value}",
-        header="SysID",
-        level="info",
-    )
+    print(f"Best parameters: {study.best_params}; best value: {study.best_value}")
 
     sim.close()
 
@@ -517,11 +514,7 @@ def evaluate(
 
         error = np.sqrt(np.mean((joint_pos_real - joint_pos_sim) ** 2))
 
-        log(
-            f"{joint_name} root mean squared error: {error}",
-            header="SysID",
-            level="info",
-        )
+        print(f"{joint_name} root mean squared error: {error}")
 
         time_seq_ref_dict[joint_name] = list(
             np.arange(sum([len(action) for action in action_list]))
@@ -546,9 +539,10 @@ def evaluate(
         time_seq_real_dict,
         joint_pos_sim_dict,
         joint_pos_real_dict,
-        robot.joint_limits,
         save_path=exp_folder_path,
+        joint_limits=robot.joint_limits,
         file_name="sim2real_joint_pos",
+        set_ylim=True,
         line_suffix=["_sim", "_real"],
     )
     plot_joint_tracking_frequency(
@@ -565,9 +559,10 @@ def evaluate(
         time_seq_ref_dict,
         joint_pos_sim_dict,
         action_sim_dict,
-        robot.joint_limits,
         save_path=exp_folder_path,
+        joint_limits=robot.joint_limits,
         file_name="sim_tracking",
+        set_ylim=True,
     )
     plot_joint_tracking_frequency(
         time_seq_sim_dict,
@@ -582,9 +577,10 @@ def evaluate(
         time_seq_ref_dict,
         joint_pos_real_dict,
         action_real_dict,
-        robot.joint_limits,
         save_path=exp_folder_path,
+        joint_limits=robot.joint_limits,
         file_name="real_tracking",
+        set_ylim=True,
     )
     plot_joint_tracking_frequency(
         time_seq_real_dict,
@@ -612,7 +608,7 @@ def main():
     parser.add_argument(
         "--robot",
         type=str,
-        default="toddlerbot",
+        default="toddlerbot_2xc",
         help="The name of the robot. Need to match the name in descriptions.",
     )
     parser.add_argument(

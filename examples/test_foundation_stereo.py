@@ -1,3 +1,9 @@
+"""Test stereo depth estimation using Foundation Stereo model.
+
+This module provides functionality to test stereo depth estimation using the Foundation Stereo
+neural network model. It processes stereo camera images to produce depth maps and point clouds.
+"""
+
 import argparse
 import os
 import statistics
@@ -17,15 +23,13 @@ from toddlerbot.utils.misc_utils import dump_profiling_data, profile
 
 # Constants
 DEBUG_IMAGES_FOLDER = os.path.join("results", "depth_blake_debug")
-DEFAULT_OUTDIR = os.path.join("results", "depth")
-CALIB_PARAMS_PATH = os.path.join(
-    "toddlerbot", "sensing", "calibration_params_blake.pkl"
+DEFAULT_OUTDIR = os.path.join(
+    "results", f"test_foundation_stereo_{time.strftime('%Y%m%d_%H%M%S')}"
 )
+CALIB_PARAMS_PATH = os.path.join("toddlerbot", "depth", "params", "calibration.pkl")
 DEFAULT_CALIB_HEIGHT = 480
 DEFAULT_CALIB_WIDTH = 640
-REC_PARAMS_PATH = os.path.join(
-    "toddlerbot", "sensing", "rectification_params_blake.npz"
-)
+REC_PARAMS_PATH = os.path.join("toddlerbot", "depth", "params", "rectification.npz")
 ENGINE_PATH = os.path.join(
     "toddlerbot",
     "depth",
@@ -38,6 +42,7 @@ NUM_WARM_UP = 10
 
 
 def parse_args():
+    """Parse command line arguments for stereo depth estimation test."""
     parser = argparse.ArgumentParser(
         description="Depth Foundation Stereo Metric Depth Estimation"
     )
@@ -135,6 +140,7 @@ def parse_args():
 
 @profile()
 def main(args):
+    """Run stereo depth estimation test with specified arguments."""
     depth_estimator = DepthEstimatorFoundationStereo(
         calib_params_path=args.calib_params,
         rec_params_path=args.rec_params,
@@ -191,6 +197,8 @@ def main(args):
             # Show original image and depth map side by side
             depth_vis = vis_disparity(
                 depth_result.depth,
+                min_val=0,
+                max_val=args.zmax,
                 invalid_upper_thres=args.zmax,
                 invalid_bottom_thres=0.0,
                 cmap=cmap,
@@ -206,7 +214,29 @@ def main(args):
                 dtype=np.uint8,
             )
             if args.vis:
-                cv2.imshow("Mono Camera Stream", combined_frame)
+                # cv2.imshow("Mono Camera Stream", combined_frame)
+
+                # Create a black canvas to add text below the images
+                center_h = depth_result.depth.shape[0] // 2
+                center_w = depth_result.depth.shape[1] // 2
+                center_depth = depth_result.depth[center_h, center_w]
+                h, w, _ = combined_frame.shape
+                text_area_height = 20
+                canvas = np.zeros((h + text_area_height, w, 3), dtype=np.uint8)
+                canvas[:h, :] = combined_frame
+
+                # Prepare and add the text to the canvas
+                text = f"Depth at center: {center_depth:.4f} m"
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                font_scale = 0.4
+                font_color = (255, 255, 255)  # White
+                thickness = 1
+                text_position = (10, h + text_area_height - 7)
+
+                cv2.putText(
+                    canvas, text, text_position, font, font_scale, font_color, thickness
+                )
+                cv2.imshow("Mono Camera Stream", canvas)
 
             # Create the point cloud and save it to the output directory
             if args.save_output:

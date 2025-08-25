@@ -1,3 +1,12 @@
+"""System identification policy for motor characterization.
+
+This module implements a system identification policy that generates chirp signals
+with varying amplitudes and PID gains to characterize motor dynamics and performance.
+"""
+
+import bisect
+import os
+import pickle
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -5,13 +14,14 @@ import numpy as np
 import numpy.typing as npt
 
 from toddlerbot.policies import BasePolicy
-from toddlerbot.sim import Obs
+from toddlerbot.sim import BaseSim, Obs
 from toddlerbot.sim.robot import Robot
-from toddlerbot.utils.math_utils import get_chirp_signal, interpolate_action
+from toddlerbot.utils.math_utils import (
+    get_chirp_signal,
+    interpolate_action,
+    get_action_traj,
+)
 from toddlerbot.utils.misc_utils import set_seed
-
-
-# This script collects data for system identification of the motors.
 
 
 @dataclass
@@ -27,7 +37,7 @@ class SysIDSpecs:
     warm_up_angles: Optional[Dict[str, float]] = None
 
 
-class SysIDFixedPolicy(BasePolicy, policy_name="sysID"):
+class SysIDPolicy(BasePolicy):
     """System identification policy for the toddlerbot robot."""
 
     def __init__(
@@ -177,11 +187,12 @@ class SysIDFixedPolicy(BasePolicy, policy_name="sysID"):
         action_list: List[npt.NDArray[np.float32]] = []
         self.ckpt_dict: Dict[float, Dict[str, float]] = {}
 
-        prep_time, prep_action = self.move(
-            -self.control_dt,
+        prep_time, prep_action = get_action_traj(
+            0.0,
             init_motor_pos,
             np.zeros_like(init_motor_pos),
             self.prep_duration,
+            self.control_dt,
         )
 
         time_list.append(prep_time)
@@ -226,11 +237,12 @@ class SysIDFixedPolicy(BasePolicy, policy_name="sysID"):
 
             def build_episode(amplitude_ratio: float, kp: float):
                 if not np.allclose(warm_up_act, action_list[-1][-1], 1e-6):
-                    warm_up_time, warm_up_action = self.move(
-                        time_list[-1][-1],
+                    warm_up_time, warm_up_action = get_action_traj(
+                        time_list[-1][-1] + self.control_dt,
                         action_list[-1][-1],
                         warm_up_act,
                         warm_up_duration,
+                        self.control_dt,
                     )
 
                     time_list.append(warm_up_time)
@@ -272,11 +284,12 @@ class SysIDFixedPolicy(BasePolicy, policy_name="sysID"):
                 time_list.append(rotate_time)
                 action_list.append(rotate_action)
 
-                reset_time, reset_action = self.move(
-                    time_list[-1][-1],
+                reset_time, reset_action = get_action_traj(
+                    time_list[-1][-1] + self.control_dt,
                     action_list[-1][-1],
                     warm_up_act,
                     reset_duration,
+                    self.control_dt,
                     end_time=0.5,
                 )
 
@@ -298,9 +311,10 @@ class SysIDFixedPolicy(BasePolicy, policy_name="sysID"):
         self.time_arr = np.concatenate(time_list)
         self.action_arr = np.concatenate(action_list)
         self.n_steps_total = len(self.time_arr)
+        self.last_ckpt_idx = -1
 
     def step(
-        self, obs: Obs, is_real: bool = False
+        self, obs: Obs, sim: BaseSim
     ) -> Tuple[Dict[str, float], npt.NDArray[np.float32]]:
         """Executes a step in the environment by interpolating an action based on the given observation time.
 
@@ -311,7 +325,27 @@ class SysIDFixedPolicy(BasePolicy, policy_name="sysID"):
         Returns:
             Tuple[Dict[str, float], npt.NDArray[np.float32]]: A tuple containing an empty dictionary and the interpolated action as a NumPy array.
         """
+        ckpt_times = list(self.ckpt_dict.keys())
+        ckpt_idx = bisect.bisect_left(ckpt_times, obs.time)
+        ckpt_idx = min(ckpt_idx, len(ckpt_times) - 1)
+        if ckpt_idx != self.last_ckpt_idx:
+            motor_kps = self.ckpt_dict[ckpt_times[ckpt_idx]]
+            motor_kps_updated = {}
+            for joint_name in motor_kps:
+                for motor_name in self.robot.joint_to_motor_name[joint_name]:
+                    motor_kps_updated[motor_name] = motor_kps[joint_name]
+
+            if np.any(list(motor_kps_updated.values())):
+                sim.set_motor_kps(motor_kps_updated)
+                self.last_ckpt_idx = ckpt_idx
+
         action = np.asarray(
             interpolate_action(obs.time, self.time_arr, self.action_arr)
         )
         return {}, action
+
+    def close(self, exp_folder_path: str):
+        """Save checkpoint configuration data to file."""
+        log_data_path = os.path.join(exp_folder_path, "ckpt_dict.pkl")
+        with open(log_data_path, "wb") as f:
+            pickle.dump(self.ckpt_dict, f)

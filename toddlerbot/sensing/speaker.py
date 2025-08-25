@@ -1,3 +1,9 @@
+"""Speaker interface module for audio output.
+
+Provides Speaker class for managing audio output to speaker devices
+with automatic volume configuration.
+"""
+
 import re
 import subprocess
 

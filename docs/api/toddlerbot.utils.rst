@@ -28,10 +28,10 @@ toddlerbot.utils.dataset\_utils module
    :undoc-members:
    :show-inheritance:
 
-toddlerbot.utils.file\_utils module
------------------------------------
+toddlerbot.utils.io\_utils module
+---------------------------------
 
-.. automodule:: toddlerbot.utils.file_utils
+.. automodule:: toddlerbot.utils.io_utils
    :members:
    :undoc-members:
    :show-inheritance:
@@ -48,6 +48,14 @@ toddlerbot.utils.misc\_utils module
 -----------------------------------
 
 .. automodule:: toddlerbot.utils.misc_utils
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+toddlerbot.utils.terrain\_utils module
+--------------------------------------
+
+.. automodule:: toddlerbot.utils.terrain_utils
    :members:
    :undoc-members:
    :show-inheritance:

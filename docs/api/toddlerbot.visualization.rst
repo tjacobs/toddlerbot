@@ -4,6 +4,14 @@ toddlerbot.visualization package
 Submodules
 ----------
 
+toddlerbot.visualization.vis\_depth\_comparison module
+------------------------------------------------------
+
+.. automodule:: toddlerbot.visualization.vis_depth_comparison
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 toddlerbot.visualization.vis\_plot module
 -----------------------------------------
 

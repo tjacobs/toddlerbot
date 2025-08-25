@@ -1,3 +1,9 @@
+"""Zero Moment Point (ZMP) planning algorithms.
+
+This module implements ZMP-based trajectory planning for bipedal walking,
+based on "A Generalized ZMP Preview Control for Bipedal Walking" by Kajita et al.
+"""
+
 from typing import List
 
 import control

@@ -1,84 +1,141 @@
+"""Test IMU sensor readings and real-time visualization.
+
+This module tests the IMU sensor by reading and visualizing real-time orientation and
+angular velocity data with optional plotting capabilities.
+"""
+
+import argparse
 import time
 
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy.spatial.transform import Rotation as R
 
-from toddlerbot.sensing.IMU import IMU
-
-# This script is for visualizing the IMU readings in real-time.
+from toddlerbot.sensing.IMU import ThreadedIMU
 
 if __name__ == "__main__":
-    # Initialize IMU
-    imu = IMU()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--plot", action="store_true", help="Enable real-time plotting")
+    args = parser.parse_args()
 
-    # Set up the figure and axis
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
-    fig.suptitle("IMU Readings - Euler Angles and Angular Velocities")
+    if args.plot:
+        # Initialize plot
+        plt.ion()
+        fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 9), sharex=True)
+        euler_lines = (
+            ax1.plot([], [], label="Roll", color="r")[0],
+            ax1.plot([], [], label="Pitch", color="g")[0],
+            ax1.plot([], [], label="Yaw", color="b")[0],
+        )
+        angvel_raw_lines = (
+            ax2.plot([], [], label="X", color="r")[0],
+            ax2.plot([], [], label="Y", color="g")[0],
+            ax2.plot([], [], label="Z", color="b")[0],
+        )
+        angvel_filtered_lines = (
+            ax3.plot([], [], label="X", color="r")[0],
+            ax3.plot([], [], label="Y", color="g")[0],
+            ax3.plot([], [], label="Z", color="b")[0],
+        )
 
-    # Set up the plot for Euler angles
-    ax1.set_title("Euler Angles (Radians)")
-    ax1.set_xlabel("Time (s)")
-    ax1.set_ylabel("Angle (rad)")
-    (line_roll,) = ax1.plot([], [], label="Roll", color="r")
-    (line_pitch,) = ax1.plot([], [], label="Pitch", color="g")
-    (line_yaw,) = ax1.plot([], [], label="Yaw", color="b")
-    ax1.legend()
-    ax1.set_ylim(-np.pi, np.pi)
+        ax1.set_ylabel("Euler angles (rad)")
+        ax1.legend()
+        ax2.set_ylabel("Raw Angular velocity (rad/s)")
+        ax2.legend()
+        ax2.set_title("Raw Angular Velocity")
+        ax3.set_ylabel("Filtered Angular velocity (rad/s)")
+        ax3.legend()
+        ax3.set_xlabel("Time (s)")
+        ax3.set_title("Filtered Angular Velocity (Butterworth)")
 
-    # Set up the plot for Angular Velocity
-    ax2.set_title("Angular Velocity (Rad/s)")
-    ax2.set_xlabel("Time (s)")
-    ax2.set_ylabel("Angular Velocity (rad/s)")
-    (line_ang_x,) = ax2.plot([], [], label="Ang Vel X", color="r")
-    (line_ang_y,) = ax2.plot([], [], label="Ang Vel Y", color="g")
-    (line_ang_z,) = ax2.plot([], [], label="Ang Vel Z", color="b")
-    ax2.legend()
-    ax2.set_ylim(-5, 5)  # Adjust this range as necessary
+    imu = ThreadedIMU()
+    imu.start()
 
-    # Initialize data storage
-    euler_data = {"time": [], "roll": [], "pitch": [], "yaw": []}
-    ang_vel_data = {"time": [], "x": [], "y": [], "z": []}
-    start_time = time.time()
-
-    def update_plot():
-        # Get current state from IMU
-        state = imu.get_state()
-        print(f"Euler: {state['euler']}, Angular Vel: {state['ang_vel']}")
-
-        current_time = time.time() - start_time
-
-        # Store data
-        euler_data["time"].append(current_time)
-        euler_data["roll"].append(state["euler"][0])
-        euler_data["pitch"].append(state["euler"][1])
-        euler_data["yaw"].append(state["euler"][2])
-
-        ang_vel_data["time"].append(current_time)
-        ang_vel_data["x"].append(state["ang_vel"][0])
-        ang_vel_data["y"].append(state["ang_vel"][1])
-        ang_vel_data["z"].append(state["ang_vel"][2])
-
-        # Update plot data
-        line_roll.set_data(euler_data["time"], euler_data["roll"])
-        line_pitch.set_data(euler_data["time"], euler_data["pitch"])
-        line_yaw.set_data(euler_data["time"], euler_data["yaw"])
-
-        line_ang_x.set_data(ang_vel_data["time"], ang_vel_data["x"])
-        line_ang_y.set_data(ang_vel_data["time"], ang_vel_data["y"])
-        line_ang_z.set_data(ang_vel_data["time"], ang_vel_data["z"])
-
-        # Set limits to follow data
-        for ax, data in zip([ax1, ax2], [euler_data, ang_vel_data]):
-            ax.set_xlim(max(0, current_time - 10), current_time + 1)
-
-        plt.pause(0.01)  # Small pause to update the plot
-
+    step_times, times, euler_vals, angvel_raw_vals, angvel_filtered_vals = (
+        [],
+        [],
+        [],
+        [],
+        [],
+    )
+    start_time = time.monotonic()
+    window = 100  # number of points to display
+    counter = 0
     try:
         while True:
-            update_plot()
+            step_start = time.monotonic()
+            data = imu.get_latest_state()
+            step_end = time.monotonic()
+
+            if data is None:
+                counter += 1
+                print(
+                    f"\rWaiting for real-world observation data... [{counter}]",
+                    end="",
+                    flush=True,
+                )
+                continue  # Wait for IMU data to be available
+
+            quat, ang_vel_raw, ang_vel_filtered = data
+            # print(
+            #     f"Data received #{data_count}: quat shape: {quat.shape}, ang_vel_raw shape: {ang_vel_raw.shape}"
+            # )
+            # print(f"  Quat: {quat}")
+            # print(f"  Raw ang_vel: {ang_vel_raw}")
+            # print(f"  Filtered ang_vel: {ang_vel_filtered}")
+            step_time = step_end - step_start
+            step_times.append(step_time)
+            # print(f"Step time: {(step_time) * 1000:.3f} ms")
+            # print(f"Euler: {rot.as_euler('xyz')}")
+            # print(f"Raw Angular velocity: {ang_vel_raw}")
+            # print(f"Filtered Angular velocity: {ang_vel_filtered}")
+
+            if args.plot:
+                print("Plotting...")
+                times.append(step_end - start_time)
+                euler_vals.append(R.from_quat(quat, scalar_first=True).as_euler("xyz"))
+                angvel_raw_vals.append(ang_vel_raw)
+                angvel_filtered_vals.append(ang_vel_filtered)
+
+                # Maintain window size
+                if len(times) > window:
+                    times = times[-window:]
+                    euler_vals = euler_vals[-window:]
+                    angvel_raw_vals = angvel_raw_vals[-window:]
+                    angvel_filtered_vals = angvel_filtered_vals[-window:]
+
+                euler_np = np.array(euler_vals)
+                angvel_raw_np = np.array(angvel_raw_vals)
+                angvel_filtered_np = np.array(angvel_filtered_vals)
+
+                for i in range(3):
+                    euler_lines[i].set_data(times, euler_np[:, i])
+                    angvel_raw_lines[i].set_data(times, angvel_raw_np[:, i])
+                    angvel_filtered_lines[i].set_data(times, angvel_filtered_np[:, i])
+
+                ax1.relim()
+                ax1.autoscale_view()
+                ax2.relim()
+                ax2.autoscale_view()
+                ax3.relim()
+                ax3.autoscale_view()
+                plt.pause(0.01)
+            else:
+                remaining_time = 0.02 - step_time
+                print(f"[TEST] Remaining time: {remaining_time:.3f} s")
+                time.sleep(max(0, remaining_time))  # Sleep to maintain 50 Hz
 
     except KeyboardInterrupt:
-        print("Real-time plotting stopped.")
+        pass
+
     finally:
+        # from toddlerbot.utils.misc_utils import dump_profiling_data
+
+        # dump_profiling_data()
+
+        print(
+            f"Average step time: {np.mean(step_times) * 1000:.3f} +- {np.std(step_times) * 1000:.3f} ms"
+        )
+
+        print("Closing IMU...")
         imu.close()
-        plt.show()

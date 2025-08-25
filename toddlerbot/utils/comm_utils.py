@@ -1,3 +1,9 @@
+"""Communication utilities for network time sync and ZeroMQ messaging.
+
+Provides ZMQ-based communication between sender and receiver nodes and network
+time synchronization functionality.
+"""
+
 import pickle
 import subprocess
 from dataclasses import dataclass
@@ -146,7 +152,7 @@ class ZMQNode:
 
         if return_last:
             # for message in messages:
-            #     print(message["test"], message["time"], time.time())
+            #     print(message["test"], message["time"], time.monotonic())
             return messages[-1] if messages else None
         else:
             return messages if messages else None

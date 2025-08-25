@@ -16,6 +16,8 @@ This codebase includes low-level control, RL training, DP training, real-world d
 
 Built entirely in Python, it is **fully pip-installable** (python >= 3.10) for seamless setup and usage!
 
+## We have released ToddlerBot 2.0!
+See [Changelog](CHANGELOG.md) for the list of new features and a migration guide from 1.0 to 2.0.
 
 ## Setup
 Refer to [this page](https://hshi74.github.io/toddlerbot/software/01_setup.html) for instructions to setup.

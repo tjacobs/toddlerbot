@@ -1,3 +1,9 @@
+"""Teleoperation follower policy with data logging capabilities.
+
+This module implements the follower robot policy for teleoperation systems,
+handling remote commands while logging interaction data for training.
+"""
+
 import os
 from typing import Dict, List, Optional, Tuple
 
@@ -7,14 +13,14 @@ import numpy.typing as npt
 
 from toddlerbot.policies.balance_pd import BalancePDPolicy
 from toddlerbot.sensing.camera import Camera
-from toddlerbot.sim import Obs
+from toddlerbot.sim import BaseSim, Obs
 from toddlerbot.sim.robot import Robot
 from toddlerbot.tools.joystick import Joystick
 from toddlerbot.utils.comm_utils import ZMQNode
 from toddlerbot.utils.dataset_utils import Data, DatasetLogger
 
 
-class TeleopFollowerPDPolicy(BalancePDPolicy, policy_name="teleop_follower_pd"):
+class TeleopFollowerPDPolicy(BalancePDPolicy):
     """Teleoperation follower policy for the follower robot of ToddlerBot."""
 
     def __init__(
@@ -77,8 +83,6 @@ class TeleopFollowerPDPolicy(BalancePDPolicy, policy_name="teleop_follower_pd"):
         self.num_arm_motors = 7
 
         if len(task) > 0:
-            self.manip_duration = 2.0
-
             motion_file_path = os.path.join("motion", f"{prep}.pkl")
             if os.path.exists(motion_file_path):
                 data_dict = joblib.load(motion_file_path)
@@ -98,7 +102,7 @@ class TeleopFollowerPDPolicy(BalancePDPolicy, policy_name="teleop_follower_pd"):
                     [self.manip_motor_pos, np.zeros(2, dtype=np.float32)]
                 )
 
-        self.capture_frame = True
+        self.capture_rgb = True
 
         self.dataset_logger = DatasetLogger()
 
@@ -121,7 +125,7 @@ class TeleopFollowerPDPolicy(BalancePDPolicy, policy_name="teleop_follower_pd"):
             return self.arm_motor_pos
 
     def step(
-        self, obs: Obs, is_real: bool = False
+        self, obs: Obs, sim: BaseSim
     ) -> Tuple[Dict[str, float], npt.NDArray[np.float32]]:
         """Executes a step in the control loop, adjusting motor targets based on the task and logging data.
 
@@ -132,7 +136,7 @@ class TeleopFollowerPDPolicy(BalancePDPolicy, policy_name="teleop_follower_pd"):
         Returns:
             Tuple[Dict[str, float], npt.NDArray[np.float32]]: A tuple containing control inputs and the updated motor target positions.
         """
-        control_inputs, motor_target = super().step(obs, is_real)
+        control_inputs, motor_target = super().step(obs, sim)
 
         if self.task == "pick" and obs.time - self.prep_duration >= self.manip_duration:
             motor_target[self.neck_motor_indices] = self.manip_motor_pos[
@@ -159,3 +163,7 @@ class TeleopFollowerPDPolicy(BalancePDPolicy, policy_name="teleop_follower_pd"):
             )
 
         return control_inputs, motor_target
+
+    def close(self, exp_folder_path):
+        """Move logged dataset files to experiment folder."""
+        self.dataset_logger.move_files_to_exp_folder(exp_folder_path)

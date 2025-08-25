@@ -1,3 +1,9 @@
+"""Microphone interface module for audio input.
+
+Provides Microphone class for capturing audio input from USB camera microphones
+or other audio input devices.
+"""
+
 import sounddevice as sd
 
 

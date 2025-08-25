@@ -1,9 +1,15 @@
+"""Force Sensitive Resistor (FSR) sensor interface module.
+
+Provides FSR class for reading pressure sensor data from the robot's feet
+via serial communication for balance and gait control.
+"""
+
 import platform
 
 import numpy as np
 import serial
 
-from toddlerbot.utils.file_utils import find_ports
+from toddlerbot.utils.io_utils import find_ports
 
 
 class FSR:

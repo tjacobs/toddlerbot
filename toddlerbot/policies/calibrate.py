@@ -1,17 +1,23 @@
+"""Robot zero point calibration policy using torso pitch PID control.
+
+This module implements a calibration policy that uses a PID controller to maintain
+the robot's torso pitch at zero degrees for accurate zero-point calibration of motors.
+"""
+
+import os
 from typing import Dict, Tuple
 
 import numpy as np
 import numpy.typing as npt
+import yaml
 
 from toddlerbot.policies import BasePolicy
-from toddlerbot.sim import Obs
+from toddlerbot.sim import BaseSim, Obs
 from toddlerbot.sim.robot import Robot
 from toddlerbot.utils.math_utils import interpolate_action
 
-# This script ensures a more accurate zero-point calibration by running a PID loop with the robot's torso pitch.
 
-
-class CalibratePolicy(BasePolicy, policy_name="calibrate"):
+class CalibratePolicy(BasePolicy):
     """Policy for calibrating zero point with the robot's torso pitch."""
 
     def __init__(
@@ -35,20 +41,13 @@ class CalibratePolicy(BasePolicy, policy_name="calibrate"):
         """
         super().__init__(name, robot, init_motor_pos)
 
-        self.default_motor_pos = np.array(
-            list(robot.default_motor_angles.values()), dtype=np.float32
-        )
-        self.default_joint_pos = np.array(
-            list(robot.default_joint_angles.values()), dtype=np.float32
-        )
-
         leg_pitch_joint_names = [
             "left_hip_pitch",
             "left_knee",
-            "left_ank_pitch",
+            "left_ankle_pitch",
             "right_hip_pitch",
             "right_knee",
-            "right_ank_pitch",
+            "right_ankle_pitch",
         ]
         self.leg_pitch_joint_indicies = np.array(
             [
@@ -65,9 +64,11 @@ class CalibratePolicy(BasePolicy, policy_name="calibrate"):
 
         # Initialize integral error
         self.integral_error = 0.0
+        self.last_motor_pos = self.default_motor_pos.copy()
+        self.is_real = None
 
     def step(
-        self, obs: Obs, is_real: bool = False
+        self, obs: Obs, sim: BaseSim
     ) -> Tuple[Dict[str, float], npt.NDArray[np.float32]]:
         """Executes a control step to maintain the torso pitch at zero using a PD+I controller.
 
@@ -85,8 +86,13 @@ class CalibratePolicy(BasePolicy, policy_name="calibrate"):
             )
             return {}, action
 
+        if self.is_real is None:
+            self.is_real = "real" in sim.name
+
+        self.last_motor_pos = obs.motor_pos.copy()
+
         # PD+I controller to maintain torso pitch at 0
-        error = obs.euler[1] + 0.05  # 0.05 cancels some backlash
+        error = obs.rot.as_euler("xyz")[1]  # + 0.05  # cancels some backlash
         error_derivative = obs.ang_vel[1]
 
         # Update integral error (with a basic anti-windup mechanism)
@@ -109,3 +115,27 @@ class CalibratePolicy(BasePolicy, policy_name="calibrate"):
         motor_target = np.array(list(motor_angles.values()), dtype=np.float32)
 
         return {}, motor_target
+
+    def close(self, exp_folder_path: str):
+        """Save calibrated motor zero positions to config file."""
+        motor_config_path = os.path.join(
+            "toddlerbot", "descriptions", self.robot.name, "motors.yml"
+        )
+        if os.path.exists(motor_config_path) and self.is_real:
+            motor_config = yaml.safe_load(open(motor_config_path, "r"))
+
+            motor_pos_delta = self.last_motor_pos - self.default_motor_pos
+            motor_pos_delta[
+                np.logical_and(motor_pos_delta > -0.005, motor_pos_delta < 0.005)
+            ] = 0.0
+            for motor_name, zero_pos in zip(
+                self.robot.motor_ordering, self.robot.motor_zero_pos + motor_pos_delta
+            ):
+                motor_config["motors"][motor_name]["zero_pos"] = round(
+                    float(zero_pos), 6
+                )
+
+            with open(motor_config_path, "w") as f:
+                yaml.dump(
+                    motor_config, f, indent=4, default_flow_style=False, sort_keys=False
+                )

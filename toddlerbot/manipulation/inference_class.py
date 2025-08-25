@@ -1,3 +1,5 @@
+"""Diffusion policy inference class for manipulation tasks."""
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -14,6 +16,8 @@ from toddlerbot.manipulation.utils.model_utils import get_resnet, replace_bn_wit
 
 
 class DPModel:
+    """Diffusion Policy model for manipulation inference."""
+
     def __init__(self, ckpt_path, stats=None):
         """Initializes the model by setting up the device, loading parameters from a checkpoint, and configuring the noise schedulers.
 

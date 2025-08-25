@@ -8,17 +8,17 @@ The codebase is organized as follows:
 .. code:: bash
 
    .
+   ├── ckpts  # model checkpoints for trained policies
    ├── datasets  # store the manipulate datasets
    ├── docs  # store the source files of the documentation
    ├── examples  # some example scripts to get started
    ├── motion  # store the keyframe motion data
+   ├── plots  # generated plots and visualizations
    ├── results  # store the results of the experiments
-   ├── scripts  # store the utility scripts
    ├── tests   # store the test scripts
    ├── toddlerbot  # the main codebase
    │   ├── actuation  # code for interacting with Dynamixel Motors
-   │   ├── algorithms  # zero moment point planner
-   │   ├── brax  # our fork of Google's Brax
+   │   ├── depth  # stereo depth estimation and related utilities
    │   ├── descriptions  # URDF, MJCF, and config files for all the variations of Toddy
    │   ├── locomotion  # RL training code in MJX
    │   ├── manipulation  # diffusion policy

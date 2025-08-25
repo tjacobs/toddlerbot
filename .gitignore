@@ -1,19 +1,14 @@
 ### Project ###
 .vscode/
+ckpts/
 datasets/
 !toddlerbot/manipulation/datasets
 plots/
 results/
-scripts/run_*_remote.sh
-scripts/run_*_remote.py
+scripts/*.sh
 wandb/
-tests/images/
-toddlerbot/policies/checkpoints/*dp.pth
-experimental/
+toddlerbot/descriptions/*/motors.yml
 toddlerbot/depth/models/
-*.engine
-*.onnx
-*.mp4
 
 ### Python ###
 

@@ -1,17 +1,27 @@
+"""Array manipulation utilities for both JAX and NumPy compatibility.
+
+Provides unified array operations that work with either JAX or NumPy based on the
+USE_JAX environment variable.
+"""
+
 import os
-from typing import Any, Callable, Tuple
+from typing import Any, Callable, Optional, Tuple
 
 import jax
 import jax.numpy as jnp
+import jax.scipy.spatial
 import numpy as np
 import numpy.typing as npt
 import scipy
+from jax.scipy.spatial.transform import Rotation as JaxRotation
+from scipy.spatial.transform import Rotation as ScipyRotation
 
 USE_JAX = os.getenv("USE_JAX", "false").lower() == "true"
 
 array_lib = jnp if USE_JAX else np
 ArrayType = jax.Array | npt.NDArray[np.float32]
 expm = jax.scipy.linalg.expm if USE_JAX else scipy.linalg.expm
+R = JaxRotation if USE_JAX else ScipyRotation
 
 
 def inplace_update(
@@ -120,3 +130,28 @@ def loop_update(
         final_traj_x = x
 
     return final_traj_x
+
+
+def random_uniform(
+    low: float,
+    high: float,
+    rng: Optional[jax.Array] = None,
+    shape: Optional[Tuple[int, ...]] = None,
+) -> ArrayType:
+    """Generates random uniform values compatible with both JAX and NumPy.
+
+    Args:
+        low: Lower bound of the uniform distribution.
+        high: Upper bound of the uniform distribution.
+        rng: JAX random key (required when USE_JAX is True).
+        shape: Shape of the output array.
+
+    Returns:
+        Random uniform array.
+    """
+    if USE_JAX:
+        if rng is None:
+            raise ValueError("JAX requires an rng key.")
+        return jax.random.uniform(rng, shape=shape, minval=low, maxval=high)
+    else:
+        return np.random.uniform(low=low, high=high, size=shape)

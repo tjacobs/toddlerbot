@@ -18,7 +18,8 @@ Flash the System
    .. image:: ../_static/jetson_flash_pins.png
 
    - Click on JP6.1 tab and download the image corresponding to Jetson Orin NX 16GB. The download link may be slow—it took us about an hour to download the image.
-   .. note::
+   
+   .. important::
       JetPack 6.1 or newer is strongly recommended, as it includes TensorRT 10.3+, which significantly improves engine build time and inference speed. We only support TensorRT 10+ for stereo depth estimation.
 
 #. After flashing, unplug the powercable, the USB-C cable and the jumper wire. Replug the power cable, the HDMI cable, the keyboard and the mouse.
@@ -91,6 +92,7 @@ Additional Packages
 
          Follow the information on `this page <https://forums.developer.nvidia.com/t/pytorch-for-jetson/72048>`__
          to install ``torch`` and ``torchvision``. For reference, we downloaded `the wheel file for PyTorch v2.3.0 with JetPack 6.0 (L4T R36.2 / R36.3) + CUDA 12.2 <https://nvidia.box.com/shared/static/mp164asf3sceb570wvjsrezk1p4ftj8t.whl>`__.
+         
    We find that the ``--content-disposition`` option is useful for downloading the file with the correct name:
 
    .. code:: bash
@@ -102,6 +104,7 @@ Additional Packages
    .. code:: bash
 
       pip install <path/to/the/wheel>
+      
    Please do **NOT** install ``numpy`` when installing ``torch`` as it will install ``numpy 2.x`` and cause conflicts.
 
    Last but not least, run the following command to verify that ``jax`` and ``torch`` versions are compatible:
@@ -110,6 +113,16 @@ Additional Packages
 
       python examples/test_jax_torch.py --platform jetson
 
+   If you encounter any issue with ``cuSPARSELt``, refer to `this page <https://developer.nvidia.com/cusparselt-downloads?target_os=Linux&target_arch=aarch64-jetson&Compilation=Native&Distribution=Ubuntu&target_version=22.04&target_type=deb_network>`__ to download the correct version.
+
+#. Install the ``ch9344ser`` driver for the 8-channel communication board:
+
+   .. code:: bash
+
+      git clone git@github.com:WCHSoftGroup/ch9344ser_linux.git
+      cd ch9344ser_linux/driver/
+      make
+      sudo make install
 
 #. We need to install Jetson.GPIO. Revised from instructions on `this page <https://github.com/NVIDIA/jetson-gpio>`__, we need to run the following commands to set it up:
 

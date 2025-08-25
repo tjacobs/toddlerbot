@@ -1,4 +1,10 @@
 #!/usr/bin/env uv run
+"""Test OpenAI Realtime API with push-to-talk interface.
+
+This module provides a TUI application for testing the OpenAI Realtime API with
+push-to-talk functionality, integrating with ToddlerBot's microphone and speaker.
+Adapted from the OpenAI Python library examples.
+"""
 ####################################################################
 # Sample TUI app with a push to talk interface to the Realtime API #
 # If you have `uv` installed and the `OPENAI_API_KEY`              #
@@ -21,15 +27,6 @@
 # [tool.uv.sources]
 # openai = { path = "../../", editable = true }
 # ///
-
-# This script is a simple Textual app that connects to the Realtime API. With OPENAI_API_KEY set up,
-# it allows you to test the OpenAI Realtime API with a push-to-talk interface, as well as the speaker
-# and microphone on Jetson. You should be able to run this script on Jetson and talk to ToddlerBot
-# from the terminal if everything works expected.
-#
-# This is adapted from the Realtime API example in the OpenAI Python library:
-# https://github.com/openai/openai-python/blob/main/examples/realtime/push_to_talk_app.py
-
 
 from __future__ import annotations
 
@@ -103,6 +100,8 @@ volume = 2.0
 
 
 class AudioPlayerAsync:
+    """Asynchronous audio player for streaming audio output."""
+
     def __init__(self):
         self.queue = []
         self.lock = threading.Lock()
@@ -172,6 +171,8 @@ class AudioPlayerAsync:
 
 
 class SessionDisplay(Static):
+    """Widget that displays the current session ID."""
+
     """A widget that shows the current session ID."""
 
     session_id = reactive("")
@@ -182,6 +183,8 @@ class SessionDisplay(Static):
 
 
 class AudioStatusIndicator(Static):
+    """Widget that shows the current audio recording status."""
+
     """A widget that shows the current audio recording status."""
 
     is_recording = reactive(False)
@@ -197,6 +200,8 @@ class AudioStatusIndicator(Static):
 
 
 class RealtimeApp(App[None]):
+    """Main Textual app for OpenAI Realtime API testing."""
+
     CSS = """
         Screen {
             background: #1a1b26;  /* Dark blue-grey background */

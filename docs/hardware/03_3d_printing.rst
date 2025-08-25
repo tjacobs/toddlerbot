@@ -9,4 +9,4 @@ Check out our `MakerWorld <https://makerworld.com/en/models/1068768>`_ release. 
 For other printers, you can download the 3MF files from the link above to inspect the printing orientation and profile of each part. 
 Proper orientation and profiles are crucial to ensure the strength and durability of the 3D-printed parts.
 
-If you need to make custom modifications or print individual components, the CAD files are available via `this Onshape link <https://cad.onshape.com/documents/ff1e767f256dd9c8abf2206a>`_.
+If you need to make custom modifications or print individual components, the CAD files are available via `this Onshape link <https://cad.onshape.com/documents/565bc33af293a651f66e88d2>`_.

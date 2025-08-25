@@ -1,7 +1,13 @@
+"""GUI application for editing and creating keyframes in MuJoCo simulations.
+
+This module provides a comprehensive GUI interface for creating, editing, and testing
+keyframe sequences for robot tasks in MuJoCo simulations. It includes real-time
+visualization, joint control sliders, and keyframe management capabilities.
+"""
+
 import argparse
 import copy
 import os
-import pickle
 import shutil
 import time
 from collections import deque
@@ -9,6 +15,7 @@ from dataclasses import asdict, dataclass
 from functools import partial
 from typing import List
 
+import joblib
 import mujoco
 import numpy as np
 from PySide6.QtCore import QMutex, QMutexLocker, Qt, QThread, QTimer, Signal, Slot
@@ -19,9 +26,11 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QGridLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -29,11 +38,12 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from scipy.spatial.transform import Rotation as R
 
 from toddlerbot.sim.mujoco_sim import MuJoCoSim
 from toddlerbot.sim.robot import Robot
-from toddlerbot.utils.math_utils import interpolate_action, mat2quat
-from toddlerbot.utils.misc_utils import find_latest_file_with_time_str
+from toddlerbot.utils.io_utils import find_latest_file_with_time_str
+from toddlerbot.utils.math_utils import interpolate_action
 
 # This script is a GUI application that allows the user to interact with MuJoCo simulations in real-time
 # and create keyframes for a given task. The keyframes can be tested and saved as a sequence
@@ -59,7 +69,6 @@ class Keyframe:
     """Dataclass for storing keyframe information."""
 
     name: str
-    index: int
     motor_pos: np.ndarray
     joint_pos: np.ndarray | None = None
     qpos: np.ndarray | None = None
@@ -195,9 +204,11 @@ class Viewport(QOpenGLWindow):
         a signal for further processing or display.
 
         """
-        t = time.time()
+        t = time.monotonic()
 
         with QMutexLocker(self.mutex):
+            self.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTPOINT] = True
+            self.opt.flags[mujoco.mjtVisFlag.mjVIS_COM] = True
             mujoco.mjv_updateScene(
                 self.model,
                 self.data,
@@ -208,10 +219,22 @@ class Viewport(QOpenGLWindow):
                 self.scn,
             )
 
+        for pos, color in sim.ee_markers:
+            mujoco.mjv_initGeom(
+                self.scn.geoms[self.scn.ngeom],
+                mujoco.mjtGeom.mjGEOM_SPHERE,
+                np.array([0.005, 0.0, 0.0], dtype=np.float64),
+                np.array(pos, dtype=np.float64),
+                np.eye(3, dtype=np.float64).flatten(),
+                np.array(color, dtype=np.float32),
+            )
+
+            self.scn.ngeom += 1
+
         viewport = mujoco.MjrRect(0, 0, self.width * 2, self.height * 2)
         mujoco.mjr_render(viewport, self.scn, self.con)
 
-        self.runtime.append(time.time() - t)
+        self.runtime.append(time.monotonic() - t)
         self.updateRuntime.emit(np.average(self.runtime))
 
 
@@ -219,8 +242,8 @@ class UpdateSimThread(QThread):
     """Thread for updating the simulation in real-time and handling keyframe and trajectory testing."""
 
     updated = Signal()
-    stateDataCurr = Signal(np.ndarray, np.ndarray, np.ndarray)
-    trajDataCurr = Signal(list, list)
+    state_data_curr = Signal(np.ndarray, np.ndarray, np.ndarray)
+    traj_data_curr = Signal(list, list, list, list, list, list, list)
 
     def __init__(
         self, sim: MuJoCoSim, robot: Robot, mutex: QMutex, parent=None
@@ -255,12 +278,16 @@ class UpdateSimThread(QThread):
         self.mutex = mutex
         self.running = True
         self.is_testing = False
+        self.is_qpos_traj = False
+        self.is_relative_frame = True
 
         self.update_joint_angles_requested = False
         self.joint_angles_to_update = robot.default_joint_angles.copy()
 
         self.update_qpos_requested = False
         self.qpos_to_update = sim.model.qpos0.copy()
+
+        self.sim.forward()
 
         self.keyframe_test_counter = -1
         self.keyframe_test_dt = 0
@@ -269,6 +296,14 @@ class UpdateSimThread(QThread):
         self.action_traj = None
         self.traj_test_dt = 0
         self.traj_physics_enabled = False
+
+        self.qpos_replay = []
+        self.body_pos_replay = []
+        self.body_quat_replay = []
+        self.body_lin_vel_replay = []
+        self.body_ang_vel_replay = []
+        self.site_pos_replay = []
+        self.site_quat_replay = []
 
     @Slot()
     def update_joint_angles(self, joint_angles_to_update):
@@ -282,7 +317,7 @@ class UpdateSimThread(QThread):
         self.update_joint_angles_requested = True
         self.joint_angles_to_update = joint_angles_to_update.copy()
 
-        print("Joint angles update requested!")
+        # print("Joint angles update requested!")
 
     @Slot()
     def update_qpos(self, qpos):
@@ -303,7 +338,7 @@ class UpdateSimThread(QThread):
         print("Qpos update requested!")
 
     @Slot()
-    def request_feet_on_ground(self):
+    def request_on_ground(self):
         """Aligns the torso of the simulated model with the ground based on foot positions.
 
         This method checks the z-coordinates of the left and right foot to determine which foot is closer to the ground. It then adjusts the torso's position and orientation in the simulation to align with the selected foot, ensuring the model's feet are on the ground. The simulation is updated with the new torso transformation.
@@ -316,34 +351,37 @@ class UpdateSimThread(QThread):
             mutex (QMutex): A mutex for thread-safe operations on the simulation data.
 
         """
-        if not self.is_testing:
-            left_foot_transform = self.sim.get_body_transofrm(self.sim.left_foot_name)
-            right_foot_transform = self.sim.get_body_transofrm(self.sim.right_foot_name)
-            torso_curr_transform = self.sim.get_body_transofrm("torso")
+        # Thread-safe check of is_testing flag
+        with QMutexLocker(self.mutex):
+            testing_in_progress = self.is_testing
 
-            # Select the foot with the smaller z-coordinate
-            if left_foot_transform[2, 3] < right_foot_transform[2, 3]:
-                aligned_torso_transform = (
-                    self.sim.left_foot_transform
-                    @ np.linalg.inv(left_foot_transform)
-                    @ torso_curr_transform
-                )
-            else:
-                aligned_torso_transform = (
-                    self.sim.right_foot_transform
-                    @ np.linalg.inv(right_foot_transform)
-                    @ torso_curr_transform
-                )
+        if not testing_in_progress:
+            torso_t_curr = self.sim.get_body_transform("torso")
+
+            site_z_min = float("inf")
+            for site_name in ["left_hand", "right_hand", "left_foot", "right_foot"]:
+                curr_transform = self.sim.get_site_transform(f"{site_name}_center")
+
+                if curr_transform[2, 3] < site_z_min:
+                    site_z_min = curr_transform[2, 3]
+
+            # aligned_torso_t = (
+            #     self.right_foot_t_init
+            #     @ np.linalg.inv(right_foot_t_curr)
+            #     @ torso_t_curr
+            # )
+            aligned_torso_height = torso_t_curr[2, 3] - site_z_min
 
             with QMutexLocker(self.mutex):
                 # Update the simulation with the new torso position and orientation
-                self.sim.data.qpos[:3] = aligned_torso_transform[
-                    :3, 3
-                ]  # Update position
-                self.sim.data.qpos[3:7] = mat2quat(aligned_torso_transform[:3, :3])
+                # self.sim.data.qpos[:3] = aligned_torso_t[:3, 3]
+                # self.sim.data.qpos[3:7] = R.from_matrix(
+                #     aligned_torso_t[:3, :3]
+                # ).as_quat(scalar_first=True)
+                self.sim.data.qpos[2] = aligned_torso_height
                 self.sim.forward()
 
-            print("Feet aligned with the ground!")
+            print("Aligned with the ground!")
 
     @Slot()
     def request_state_data(self):
@@ -355,14 +393,14 @@ class UpdateSimThread(QThread):
         when the system is not in testing mode.
 
         """
-        if not self.is_testing:
-            """Retrieve joint angles from the simulation and emit the signal."""
-            motor_angles = self.sim.get_motor_angles(type="array")
-            joint_angles = self.sim.get_joint_angles(type="array")
-            qpos = self.sim.data.qpos.copy()
-            self.stateDataCurr.emit(motor_angles, joint_angles, qpos)  # Emit data
-
-            print("State data requested!")
+        # Thread-safe check and data retrieval
+        with QMutexLocker(self.mutex):
+            if not self.is_testing:
+                motor_pos = self.sim.get_motor_angles(type="array")
+                joint_pos = self.sim.get_joint_angles(type="array")
+                qpos = self.sim.data.qpos.copy()
+                self.state_data_curr.emit(motor_pos, joint_pos, qpos)  # Emit data
+                print("State data requested!")
 
     @Slot()
     def request_keyframe_test(self, keyframe: Keyframe, dt: float):
@@ -376,54 +414,91 @@ class UpdateSimThread(QThread):
             dt (float): The time duration for which the keyframe test should run.
 
         """
-        if not self.is_testing:
-            with QMutexLocker(self.mutex):
+        with QMutexLocker(self.mutex):
+            if not self.is_testing:
+                # Reset any previous test state
+                self.keyframe_test_counter = -1
+                self.traj_test_counter = -1
+
+                # Set up simulation state
                 self.sim.data.qpos = keyframe.qpos.copy()
                 self.sim.forward()
                 self.sim.set_motor_target(keyframe.motor_pos.copy())
 
-            self.keyframe_test_dt = dt
-            self.keyframe_test_counter = 0
-
-            self.is_testing = True
-            print("Keyframe test started!")
+                # Start keyframe test
+                self.keyframe_test_dt = dt
+                self.keyframe_test_counter = 0
+                self.is_testing = True
+                print("Keyframe test started!")
 
     @Slot()
     def request_trajectory_test(
         self,
         qpos_start: np.ndarray,
-        action_traj: List[np.ndarray],
+        traj: List[np.ndarray],
         dt: float,
         physics_enabled: bool,
+        is_qpos_traj: bool = False,
+        is_relative_frame: bool = True,
     ):
         """Initiates a trajectory test by setting the initial conditions and parameters.
 
-        This function sets up a trajectory test by initializing the simulation state with a given starting position, action trajectory, time step, and physics settings. It prepares the system for testing by resetting relevant counters and flags.
+        This function sets up a trajectory test by initializing the simulation state
+        with a given starting position, action or qpos trajectory, time step, and physics settings.
+        It prepares the system for testing by resetting relevant counters and flags.
 
         Args:
             qpos_start (np.ndarray): The starting joint positions for the simulation.
-            action_traj (List[np.ndarray]): A list of action vectors representing the trajectory to be tested.
+            traj (List[np.ndarray]): A list of action or qpos vectors representing the trajectory to be tested.
             dt (float): The time step duration for each action in the trajectory.
             physics_enabled (bool): A flag indicating whether physics should be enabled during the trajectory test.
-
+            is_qpos_traj (bool): Flag to indicate if the trajectory is composed of full qpos vectors.
+            is_relative_frame (bool): Flag to indicate if the trajectory should be stored in the robot's relative frame.
         """
-        if not self.is_testing:
-            with QMutexLocker(self.mutex):
+        with QMutexLocker(self.mutex):
+            if not self.is_testing:
+                # Reset any previous test state
+                self.keyframe_test_counter = -1
+                self.traj_test_counter = -1
+
+                # Set up simulation state
                 self.sim.data.qpos = qpos_start.copy()
+                self.sim.data.qvel[:] = 0
+                self.sim.data.ctrl[:] = 0
                 self.sim.forward()
 
-            self.action_traj = action_traj
-            self.traj_test_dt = dt
-            self.traj_physics_enabled = physics_enabled
-            self.traj_test_counter = 0
+                # Set up trajectory test parameters
+                if is_qpos_traj:
+                    # TODO: Sharing self.action_traj for qpos trajectory tests for now not to break existing code
+                    self.action_traj = traj
+                    print("Running qpos trajectory test!")
+                    print(f"Trajectory length: {len(self.action_traj)}")
+                else:
+                    self.action_traj = traj
+                    print("Running action trajectory test!")
+                    print(f"Trajectory length: {len(self.action_traj)}")
+                self.traj_test_dt = dt
+                self.traj_physics_enabled = physics_enabled
+                self.traj_test_counter = 0
 
-            print("Trajectory test started!")
-            print(f"Trajectory length: {len(action_traj)}")
+                # Clear replay data
+                self.qpos_replay.clear()
+                self.body_pos_replay.clear()
+                self.body_quat_replay.clear()
+                self.body_lin_vel_replay.clear()
+                self.body_ang_vel_replay.clear()
+                self.site_pos_replay.clear()
+                self.site_quat_replay.clear()
 
-            self.ee_traj = []
-            self.root_traj = []
+                # Start trajectory test
+                self.is_testing = True
 
-            self.is_testing = True
+                self.is_qpos_traj = is_qpos_traj
+                self.is_relative_frame = is_relative_frame
+                if self.is_relative_frame:
+                    print("Saving poses in robot-relative frame!")
+                else:
+                    print("saving poses in global frame!")
 
     def run(self) -> None:
         """Executes the main loop for updating simulation states and handling various test scenarios.
@@ -441,55 +516,136 @@ class UpdateSimThread(QThread):
             self.traj_test_counter (int): Counter for trajectory testing.
             self.traj_physics_enabled (bool): Flag to enable physics during trajectory testing.
             self.action_traj (list): List of actions for trajectory testing.
-            self.ee_traj (list): List to store end-effector trajectory data.
-            self.root_traj (list): List to store root position trajectory data.
             self.keyframe_test_dt (float): Time delta for keyframe testing.
             self.traj_test_dt (float): Time delta for trajectory testing.
         """
         while self.running:
             if self.update_qpos_requested:
                 with QMutexLocker(self.mutex):
+                    # Stop any ongoing tests before updating qpos
+                    self.is_testing = False
+                    self.keyframe_test_counter = -1
+                    self.traj_test_counter = -1
+
                     self.sim.data.qpos = self.qpos_to_update.copy()
                     self.sim.forward()
+                    self.update_qpos_requested = False
 
-                self.update_qpos_requested = False
-                self.keyframe_test_counter = -1
                 self.updated.emit()
 
             elif self.update_joint_angles_requested:
-                joint_angles = self.sim.get_joint_angles()
-                joint_angles.update(self.joint_angles_to_update)
-
                 with QMutexLocker(self.mutex):
+                    # Stop any ongoing tests before updating joint angles
+                    self.is_testing = False
+                    self.keyframe_test_counter = -1
+                    self.traj_test_counter = -1
+
+                    joint_angles = self.sim.get_joint_angles()
+                    joint_angles.update(self.joint_angles_to_update)
                     self.sim.set_joint_angles(joint_angles)
                     self.sim.forward()
+                    self.update_joint_angles_requested = False
 
-                self.update_joint_angles_requested = False
-                self.keyframe_test_counter = -1
                 self.updated.emit()  # Notify UI that update is complete
 
             elif self.keyframe_test_counter >= 0 and self.keyframe_test_counter <= 100:
-                if self.keyframe_test_counter == 100:
-                    self.keyframe_test_counter += 1
-                    self.is_testing = False
-                    continue
-
+                # Check for completion with thread-safe counter access
                 with QMutexLocker(self.mutex):
-                    self.sim.step()
+                    current_test_counter = self.keyframe_test_counter
+                    if current_test_counter == 100:
+                        self.keyframe_test_counter = -1
+                        self.is_testing = False
+                        print("Keyframe test completed.")
+                        continue
+                    else:
+                        # Perform simulation step
+                        self.sim.step()
+                        self.keyframe_test_counter += 1
 
-                self.keyframe_test_counter += 1
+                # Sleep outside mutex to reduce contention
                 self.msleep(int(self.keyframe_test_dt * 1000))
 
             elif self.traj_test_counter >= 0 and self.traj_test_counter <= len(
                 self.action_traj
             ):
-                if self.traj_test_counter == len(self.action_traj):
-                    self.trajDataCurr.emit(self.ee_traj, self.root_traj)
-                    self.traj_test_counter += 1
-                    self.is_testing = False
+                # Check if test trajectory is stopped (with proper synchronization)
+                with QMutexLocker(self.mutex):
+                    trajectory_stopped = not self.is_testing
+                    current_counter = self.traj_test_counter
+
+                if trajectory_stopped:
+                    # Copy data for emission outside mutex
+                    qpos_copy = self.qpos_replay.copy()
+                    body_pos_copy = self.body_pos_replay.copy()
+                    body_quat_copy = self.body_quat_replay.copy()
+                    body_lin_vel_copy = self.body_lin_vel_replay.copy()
+                    body_ang_vel_copy = self.body_ang_vel_replay.copy()
+                    site_pos_copy = self.site_pos_replay.copy()
+                    site_quat_copy = self.site_quat_replay.copy()
+
+                    # Reset state
+                    self.traj_test_counter = -1
+                    self.keyframe_test_counter = -1
+                    self.action_traj = None
+                    self.qpos_replay.clear()
+                    self.body_pos_replay.clear()
+                    self.body_quat_replay.clear()
+                    self.body_lin_vel_replay.clear()
+                    self.body_ang_vel_replay.clear()
+                    self.site_pos_replay.clear()
+                    self.site_quat_replay.clear()
+
+                    # Emit signal outside critical section
+                    self.traj_data_curr.emit(
+                        qpos_copy,
+                        body_pos_copy,
+                        body_quat_copy,
+                        body_lin_vel_copy,
+                        body_ang_vel_copy,
+                        site_pos_copy,
+                        site_quat_copy,
+                    )
+                    print("Trajectory stopped and state reset.")
                     continue
 
-                t1 = time.time()
+                if current_counter == len(self.action_traj):
+                    # Copy data for emission outside mutex
+                    qpos_copy = self.qpos_replay.copy()
+                    body_pos_copy = self.body_pos_replay.copy()
+                    body_quat_copy = self.body_quat_replay.copy()
+                    body_lin_vel_copy = self.body_lin_vel_replay.copy()
+                    body_ang_vel_copy = self.body_ang_vel_replay.copy()
+                    site_pos_copy = self.site_pos_replay.copy()
+                    site_quat_copy = self.site_quat_replay.copy()
+
+                    # Reset state with mutex protection
+                    with QMutexLocker(self.mutex):
+                        self.traj_test_counter = -1
+                        self.keyframe_test_counter = -1
+                        self.action_traj = None
+                        self.qpos_replay.clear()
+                        self.body_pos_replay.clear()
+                        self.body_quat_replay.clear()
+                        self.body_lin_vel_replay.clear()
+                        self.body_ang_vel_replay.clear()
+                        self.site_pos_replay.clear()
+                        self.site_quat_replay.clear()
+                        self.is_testing = False
+
+                    # Emit signal outside critical section
+                    self.traj_data_curr.emit(
+                        qpos_copy,
+                        body_pos_copy,
+                        body_quat_copy,
+                        body_lin_vel_copy,
+                        body_ang_vel_copy,
+                        site_pos_copy,
+                        site_quat_copy,
+                    )
+                    print("Trajectory test finished and state reset.")
+                    continue
+
+                t1 = time.monotonic()
 
                 with QMutexLocker(self.mutex):
                     if self.traj_physics_enabled:
@@ -497,30 +653,184 @@ class UpdateSimThread(QThread):
                             self.action_traj[self.traj_test_counter]
                         )
                         self.sim.step()
+                    elif self.is_qpos_traj:
+                        self.sim.set_qpos(self.action_traj[self.traj_test_counter])
+                        self.sim.forward()
                     else:
                         self.sim.set_motor_angles(
                             self.action_traj[self.traj_test_counter]
                         )
                         self.sim.forward()
 
-                ee_pose_combined = []
-                for side in ["left", "right"]:
-                    ee_pos = self.sim.data.site(f"{side}_ee_center").xpos.copy()
-                    ee_quat = mat2quat(
-                        self.sim.data.site(f"{side}_ee_center")
-                        .xmat.reshape(3, 3)
-                        .copy()
-                    )
-                    ee_pose_combined.extend(ee_pos)
-                    ee_pose_combined.extend(ee_quat)
+                # Record simulation data (thread-safe access)
+                with QMutexLocker(self.mutex):
+                    # self.sim.check_self_collisions()
+                    qpos_data = np.array(self.sim.data.qpos, dtype=np.float32)
 
-                self.ee_traj.append(np.array(ee_pose_combined, dtype=np.float32))
-                self.root_traj.append(self.sim.data.qpos[:7])
-                t2 = time.time()
+                    body_pos = []
+                    body_quat = []
+                    body_lin_vel = []
+                    body_ang_vel = []
+                    site_pos = []
+                    site_quat = []
+
+                    if self.is_relative_frame:
+                        # Get raw body data from simulation
+                        body_pos_world = np.array(self.sim.data.xpos, dtype=np.float32)
+                        body_quat_world = np.array(
+                            self.sim.data.xquat, dtype=np.float32
+                        )
+                        body_lin_vel_world = np.array(
+                            self.sim.data.cvel[:, 3:], dtype=np.float32
+                        )
+                        body_ang_vel_world = np.array(
+                            self.sim.data.cvel[:, :3], dtype=np.float32
+                        )
+
+                        # Transform to robot-relative frame (relative to torso)
+                        torso_pos = body_pos_world[1]  # Torso is typically body index 1
+                        torso_quat = body_quat_world[1]  # Torso quaternion
+
+                        # Convert torso quaternion to rotation matrix for transformation
+                        torso_rot = R.from_quat(
+                            np.array(
+                                [
+                                    torso_quat[1],
+                                    torso_quat[2],
+                                    torso_quat[3],
+                                    torso_quat[0],
+                                ]
+                            )
+                        )  # xyzw format
+                        torso_rot_inv = torso_rot.inv()
+
+                        # Transform all body positions to robot-relative frame
+                        body_pos_rel = np.zeros_like(body_pos_world)
+                        body_quat_rel = np.zeros_like(body_quat_world)
+                        body_lin_vel_rel = np.zeros_like(body_lin_vel_world)
+                        body_ang_vel_rel = np.zeros_like(body_ang_vel_world)
+
+                        for i in range(len(body_pos_world)):
+                            # Transform position: subtract torso position and rotate to robot frame
+                            pos_diff = body_pos_world[i] - torso_pos
+                            body_pos_rel[i] = torso_rot_inv.apply(pos_diff)
+
+                            # Transform quaternion: multiply by inverse torso rotation
+                            body_quat_i = R.from_quat(
+                                np.array(
+                                    [
+                                        body_quat_world[i][1],
+                                        body_quat_world[i][2],
+                                        body_quat_world[i][3],
+                                        body_quat_world[i][0],
+                                    ]
+                                )
+                            )  # xyzw
+                            body_quat_rel_i = body_quat_i * torso_rot_inv
+                            quat_rel_wxyz = body_quat_rel_i.as_quat(
+                                scalar_first=True
+                            )  # wxyz format
+                            body_quat_rel[i] = quat_rel_wxyz
+
+                            body_lin_vel_rel[i] = torso_rot_inv.apply(
+                                body_lin_vel_world[i]
+                            )
+                            body_ang_vel_rel[i] = torso_rot_inv.apply(
+                                body_ang_vel_world[i]
+                            )
+
+                        body_pos = body_pos_rel.copy()
+                        body_quat = body_quat_rel.copy()
+                        body_lin_vel = body_lin_vel_rel.copy()
+                        body_ang_vel = body_ang_vel_rel.copy()
+
+                        # Record site poses
+                        for side in ["left", "right"]:
+                            for ee_name in ["hand", "foot"]:
+                                ee_pos_world = self.sim.data.site(
+                                    f"{side}_{ee_name}_center"
+                                ).xpos.copy()
+                                ee_mat = self.sim.data.site(
+                                    f"{side}_{ee_name}_center"
+                                ).xmat.reshape(3, 3)
+                                ee_quat_world = R.from_matrix(ee_mat).as_quat(
+                                    scalar_first=True
+                                )
+
+                                # Transform site position to robot-relative frame
+                                ee_pos_diff = ee_pos_world - torso_pos
+                                ee_pos_rel = torso_rot_inv.apply(ee_pos_diff)
+
+                                # Transform site quaternion to robot-relative frame
+                                ee_rot_world = R.from_quat(
+                                    np.array(
+                                        [
+                                            ee_quat_world[1],
+                                            ee_quat_world[2],
+                                            ee_quat_world[3],
+                                            ee_quat_world[0],
+                                        ]
+                                    )
+                                )  # xyzw
+                                ee_rot_rel = ee_rot_world * torso_rot_inv
+                                ee_quat_rel = ee_rot_rel.as_quat(
+                                    scalar_first=True
+                                )  # wxyz format
+
+                                site_pos.append(ee_pos_rel)
+                                site_quat.append(ee_quat_rel)
+                    else:
+                        body_pos_world = np.array(self.sim.data.xpos, dtype=np.float32)
+                        body_quat_world = np.array(
+                            self.sim.data.xquat, dtype=np.float32
+                        )
+                        body_lin_vel_world = np.array(
+                            self.sim.data.cvel[:, 3:], dtype=np.float32
+                        )
+                        body_ang_vel_world = np.array(
+                            self.sim.data.cvel[:, :3], dtype=np.float32
+                        )
+                        body_pos = body_pos_world.copy()
+                        body_quat = body_quat_world.copy()
+                        body_lin_vel = body_lin_vel_world.copy()
+                        body_ang_vel = body_ang_vel_world.copy()
+
+                        # Record site poses
+                        for side in ["left", "right"]:
+                            for ee_name in ["hand", "foot"]:
+                                ee_pos_world = self.sim.data.site(
+                                    f"{side}_{ee_name}_center"
+                                ).xpos.copy()
+                                ee_mat = self.sim.data.site(
+                                    f"{side}_{ee_name}_center"
+                                ).xmat.reshape(3, 3)
+                                ee_quat_world = R.from_matrix(ee_mat).as_quat(
+                                    scalar_first=True
+                                )
+
+                                site_pos.append(ee_pos_world)
+                                site_quat.append(ee_quat_world)
+
+                # Store data outside mutex to minimize lock time
+                self.qpos_replay.append(qpos_data)
+                self.body_pos_replay.append(body_pos)
+                self.body_quat_replay.append(body_quat)
+                self.body_lin_vel_replay.append(body_lin_vel)
+                self.body_ang_vel_replay.append(body_ang_vel)
+
+                self.site_pos_replay.append(np.array(site_pos, dtype=np.float32))
+                self.site_quat_replay.append(np.array(site_quat, dtype=np.float32))
+                t2 = time.monotonic()
                 self.traj_test_counter += 1
                 time_left = self.traj_test_dt - (t2 - t1)
                 if time_left > 0:
                     self.msleep(int(time_left * 1000))
+                else:
+                    # Yield briefly to prevent busy waiting
+                    self.msleep(1)
+            else:
+                # No operations pending, yield briefly to prevent busy waiting
+                self.msleep(5)
 
     def stop(self):
         """Stops the execution of the current process.
@@ -534,7 +844,14 @@ class UpdateSimThread(QThread):
 class MuJoCoApp(QMainWindow):
     """Main application window for interacting with MuJoCo simulations and creating keyframes."""
 
-    def __init__(self, sim: MuJoCoSim, robot: Robot, task_name: str, run_name: str):
+    def __init__(
+        self,
+        sim: MuJoCoSim,
+        robot: Robot,
+        task_name: str,
+        run_name: str,
+        dt: float = 0.02,
+    ):
         """Initializes the class with simulation, robot, and task details, setting up directories and loading data.
 
         Args:
@@ -568,6 +885,7 @@ class MuJoCoApp(QMainWindow):
         self.sim = sim
         self.robot = robot
         self.task_name = task_name
+        self.dt = dt
 
         if run_name == task_name:
             time_str = time.strftime("%Y%m%d_%H%M%S")
@@ -575,15 +893,15 @@ class MuJoCoApp(QMainWindow):
                 "results", f"{robot.name}_keyframe_{sim.name}_{time_str}"
             )
             os.makedirs(self.result_dir, exist_ok=True)
-            self.data_path = os.path.join(self.result_dir, f"{task_name}.pkl")
-            shutil.copy2(os.path.join("motion", f"{task_name}.pkl"), self.data_path)
+            self.data_path = os.path.join(self.result_dir, f"{task_name}.lz4")
+            shutil.copy2(os.path.join("motion", f"{task_name}.lz4"), self.data_path)
 
         elif len(run_name) > 0:
             self.data_path = find_latest_file_with_time_str(
                 os.path.join("results", run_name), task_name
             )
             if self.data_path is None:
-                self.data_path = os.path.join("results", run_name, f"{task_name}.pkl")
+                self.data_path = os.path.join("results", run_name, f"{task_name}.lz4")
 
             self.result_dir = os.path.dirname(self.data_path)
         else:
@@ -596,14 +914,14 @@ class MuJoCoApp(QMainWindow):
 
         self.mirror_joint_signs = {
             "left_hip_pitch": -1,
-            "left_hip_roll": 1,
+            "left_hip_roll": -1,
             "left_hip_yaw_driven": -1,
             "left_knee": -1,
-            "left_ank_pitch": -1,
-            "left_ank_roll": -1,
-            "left_sho_pitch": -1,
-            "left_sho_roll": 1,
-            "left_sho_yaw_driven": -1,
+            "left_ankle_pitch": -1,
+            "left_ankle_roll": -1,
+            "left_shoulder_pitch": -1,
+            "left_shoulder_roll": 1,
+            "left_shoulder_yaw_driven": -1,
             "left_elbow_roll": 1,
             "left_elbow_yaw_driven": -1,
             "left_wrist_pitch_driven": -1,
@@ -611,9 +929,15 @@ class MuJoCoApp(QMainWindow):
             "left_gripper_pinion": 1,
         }
 
+        if self.robot.name == "toddlerbot_2xc":
+            self.mirror_joint_signs["left_hip_roll"] = 1
+
         self.paused = True
         self.slider_columns = 4
         self.qpos_offset = 7
+
+        self.saved_left_foot_pose = None
+        self.saved_right_foot_pose = None
 
         self.model = sim.model
         self.data = sim.data
@@ -631,8 +955,8 @@ class MuJoCoApp(QMainWindow):
         self.sim_thread = UpdateSimThread(sim, robot, self.mutex, self)
         self.sim_thread.start()
 
-        self.sim_thread.stateDataCurr.connect(self.update_keyframe_with_signal)
-        self.sim_thread.trajDataCurr.connect(self.update_traj_with_signal)
+        self.sim_thread.state_data_curr.connect(self.update_keyframe_with_signal)
+        self.sim_thread.traj_data_curr.connect(self.update_traj_with_signal)
 
         self.setup_ui()
         self.load_data()
@@ -704,19 +1028,23 @@ class MuJoCoApp(QMainWindow):
         test_button.clicked.connect(self.test_keyframe)
         grid_layout.addWidget(test_button, 0, 3)
 
-        ground_button = QPushButton("Put Feet on Ground")
-        ground_button.clicked.connect(self.put_feet_on_ground)
+        ground_button = QPushButton("Put on Ground")
+        ground_button.clicked.connect(self.put_on_ground)
         grid_layout.addWidget(ground_button, 0, 4)
 
         # Mirror & Reverse Mirror Checkboxes
         self.mirror_checked = QCheckBox("Mirror")
         self.mirror_checked.setChecked(True)
         self.mirror_checked.toggled.connect(self.on_mirror_checked)
-        grid_layout.addWidget(self.mirror_checked, 0, 5)
+        grid_layout.addWidget(self.mirror_checked, 1, 5)
 
         self.rev_mirror_checked = QCheckBox("Rev. Mirror")
         self.rev_mirror_checked.toggled.connect(self.on_rev_mirror_checked)
-        grid_layout.addWidget(self.rev_mirror_checked, 0, 6)
+        grid_layout.addWidget(self.rev_mirror_checked, 1, 6)
+
+        self.collision_geom_checked = QCheckBox("Collsion Geom")
+        self.collision_geom_checked.toggled.connect(self.on_collision_geom_checked)
+        grid_layout.addWidget(self.collision_geom_checked, 1, 7)
 
         # Sequence Buttons
         add_to_sequence_button = QPushButton("Add to Sequence")
@@ -727,46 +1055,59 @@ class MuJoCoApp(QMainWindow):
         remove_from_sequence_button.clicked.connect(self.remove_from_sequence)
         grid_layout.addWidget(remove_from_sequence_button, 1, 1)
 
-        update_arrival_time_button = QPushButton("Update Arrival Time")
-        update_arrival_time_button.clicked.connect(self.update_arrival_time)
-        grid_layout.addWidget(update_arrival_time_button, 1, 2)
-
-        move_up_button = QPushButton("Move Up")
-        move_up_button.clicked.connect(self.move_up)
-        grid_layout.addWidget(move_up_button, 1, 3)
-
-        move_down_button = QPushButton("Move Down")
-        move_down_button.clicked.connect(self.move_down)
-        grid_layout.addWidget(move_down_button, 1, 4)
-
         test_trajectory_button = QPushButton("Display Trajectory")
         test_trajectory_button.clicked.connect(self.test_trajectory)
-        grid_layout.addWidget(test_trajectory_button, 1, 5)
+        grid_layout.addWidget(test_trajectory_button, 1, 2)
+
+        test_qpos_trajectory_button = QPushButton("Display Qpos Trajectory")
+        test_qpos_trajectory_button.clicked.connect(self.test_qpos_trajectory)
+        grid_layout.addWidget(test_qpos_trajectory_button, 1, 3)
+        self.is_qpos_traj = False
+
+        stop_trajectory_button = QPushButton("Stop Trajectory")
+        stop_trajectory_button.clicked.connect(self.stop_trajectory)
+        grid_layout.addWidget(stop_trajectory_button, 1, 4)
 
         # Physics Toggle
         self.physics_enabled = QCheckBox("Enable Physics")
         self.physics_enabled.setChecked(True)
-        grid_layout.addWidget(self.physics_enabled, 1, 6)
-
-        # Entry Fields (Arrival Time, Delta Time, Motion Name)
-        arrival_time_label = QLabel("Arrival Time:")
-        grid_layout.addWidget(arrival_time_label, 2, 0)
-        self.arrival_time_entry = QLineEdit("0")
-        grid_layout.addWidget(self.arrival_time_entry, 2, 1)
-
-        dt_label = QLabel("Interpolation Delta Time:")
-        grid_layout.addWidget(dt_label, 2, 2)
-        self.dt_entry = QLineEdit("0.02")
-        grid_layout.addWidget(self.dt_entry, 2, 3)
+        grid_layout.addWidget(self.physics_enabled, 2, 6)
 
         motion_name_label = QLabel("Motion Name:")
-        grid_layout.addWidget(motion_name_label, 2, 4)
+        grid_layout.addWidget(motion_name_label, 0, 5)
         self.motion_name_entry = QLineEdit(self.task_name)
-        grid_layout.addWidget(self.motion_name_entry, 2, 5)
+        grid_layout.addWidget(self.motion_name_entry, 0, 6)
 
         save_button = QPushButton("Save")
         save_button.clicked.connect(self.save_data)
-        grid_layout.addWidget(save_button, 2, 6)
+        grid_layout.addWidget(save_button, 0, 7)
+
+        save_l_foot_btn = QPushButton("Save Left Foot Pose")
+        save_l_foot_btn.clicked.connect(self.save_left_foot_pose)
+        grid_layout.addWidget(save_l_foot_btn, 2, 0)
+
+        apply_l_foot_btn = QPushButton("Apply Left Foot Pose")
+        apply_l_foot_btn.clicked.connect(self.apply_left_foot_pose)
+        grid_layout.addWidget(apply_l_foot_btn, 2, 1)
+
+        save_r_foot_btn = QPushButton("Save Right Foot Pose")
+        save_r_foot_btn.clicked.connect(self.save_right_foot_pose)
+        grid_layout.addWidget(save_r_foot_btn, 2, 2)
+
+        apply_r_foot_btn = QPushButton("Apply Right Foot Pose")
+        apply_r_foot_btn.clicked.connect(self.apply_right_foot_pose)
+        grid_layout.addWidget(apply_r_foot_btn, 2, 3)
+
+        save_hand_btn = QPushButton("Save Hand Poses")
+        save_hand_btn.clicked.connect(self.save_hand_poses)
+        grid_layout.addWidget(save_hand_btn, 2, 4)
+
+        self.relative_frame_checked = QCheckBox("Save in Robot Frame")
+        self.relative_frame_checked.setChecked(
+            True
+        )  # default to saving in robot frame behavior
+        grid_layout.addWidget(self.relative_frame_checked, 2, 5)
+        self.is_relative_frame = self.relative_frame_checked.isChecked()
 
         button_frame = QWidget()
         button_frame.setLayout(grid_layout)
@@ -788,6 +1129,15 @@ class MuJoCoApp(QMainWindow):
             QListWidget.ExtendedSelection
         )  # Allow multi-selection using cmd/ctrl and shift
         self.keyframe_listbox.itemSelectionChanged.connect(self.on_keyframe_select)
+        # Allow double click to rename
+        self.keyframe_listbox.setEditTriggers(QListWidget.EditTrigger.DoubleClicked)
+        self.keyframe_listbox.itemChanged.connect(self.on_keyframe_name_changed)
+        # Allow drag and drop (works for multi-selection)
+        self.keyframe_listbox.setDragEnabled(True)
+        self.keyframe_listbox.setAcceptDrops(True)
+        self.keyframe_listbox.setDropIndicatorShown(True)
+        self.keyframe_listbox.setDragDropMode(QListWidget.InternalMove)
+        self.keyframe_listbox.model().rowsMoved.connect(self.sync_keyframe_order)
         vbox_layout.addWidget(self.keyframe_listbox, stretch=1)
 
         sequence_label = QLabel("Sequence:")
@@ -798,6 +1148,15 @@ class MuJoCoApp(QMainWindow):
             QListWidget.ExtendedSelection
         )  # Allow multi-selection using cmd/ctrl and shift
         self.sequence_listbox.itemSelectionChanged.connect(self.on_sequence_select)
+        # Allow double click to edit arrival time
+        self.sequence_listbox.setEditTriggers(QListWidget.EditTrigger.NoEditTriggers)
+        self.sequence_listbox.itemDoubleClicked.connect(self.edit_sequence_arrival_time)
+        # Allow drag and drop (works for multi-selection)
+        self.sequence_listbox.setDragEnabled(True)
+        self.sequence_listbox.setAcceptDrops(True)
+        self.sequence_listbox.setDropIndicatorShown(True)
+        self.sequence_listbox.setDragDropMode(QListWidget.InternalMove)
+        self.sequence_listbox.model().rowsMoved.connect(self.sync_sequence_order)
         vbox_layout.addWidget(self.sequence_listbox, stretch=1)
 
         list_frame = QWidget()
@@ -814,7 +1173,7 @@ class MuJoCoApp(QMainWindow):
 
         self.joint_sliders = {}
         self.joint_labels = {}
-        self.normalized_range = (-500, 500)  # Fixed range for all sliders
+        self.normalized_range = (-2000, 2000)  # Fixed range for all sliders
 
         reordered_list = []
         # Separate left and right joints
@@ -863,8 +1222,12 @@ class MuJoCoApp(QMainWindow):
                 partial(self.on_joint_label_change, joint_name)
             )
             joint_sliders_layout.addWidget(value_label, row, col * 3 + 2)
-            slider.sliderReleased.connect(
-                partial(self.on_joint_slider_release, joint_name)
+            # slider.sliderReleased.connect(
+            #     partial(self.on_joint_slider_release, joint_name)
+            # )
+            # Visualize robot pose even during slider movement
+            slider.valueChanged.connect(
+                partial(self.on_joint_slider_moving, joint_name)
             )
             joint_sliders_layout.addWidget(slider, row, col * 3 + 1)
 
@@ -885,12 +1248,116 @@ class MuJoCoApp(QMainWindow):
         self.setCentralWidget(w)
         self.resize(1280, 720)
 
-        # self.update_sliders_periodically()
+    def test_qpos_trajectory(self):
+        if len(self.sequence_list) < 2:
+            self.show_warning("Need at least 2 keyframes in sequence to preview.")
+            return
+
+        # Find selected start index
+        start_idx = 0
+        if self.sequence_listbox.selectedItems():
+            start_idx = self.sequence_listbox.currentRow()
+
+        # Extract full qpos and arrival times
+        qpos_list = []
+        times = []
+        for keyframe_name, arrival_time in self.sequence_list:
+            for keyframe in self.keyframes:
+                if keyframe_name == keyframe.name:
+                    qpos_list.append(keyframe.qpos)
+                    times.append(arrival_time)
+                    break
+
+        if np.any(np.diff(times) <= 0):
+            self.show_warning("The arrival times are not sorted correctly!")
+            return
+
+        times = np.array(times) - times[0]
+        self.traj_times = np.arange(0, times[-1], self.dt)
+
+        # Interpolate full qpos over time
+        qpos_arr = np.array(qpos_list)
+        qpos_traj = []
+
+        # Start from selected keyframe’s time
+        traj_start = int(np.searchsorted(self.traj_times, times[start_idx]))
+
+        for t in self.traj_times:
+            if t < times[-1]:
+                qpos_t = interpolate_action(t, times, qpos_arr)
+            else:
+                qpos_t = qpos_arr[-1]
+            qpos_traj.append(qpos_t)
+
+        self.is_qpos_traj = True
+
+        self.is_relative_frame = self.relative_frame_checked.isChecked()
+
+        self.sim_thread.request_trajectory_test(
+            qpos_list[start_idx],
+            qpos_traj[traj_start:],
+            self.dt,
+            physics_enabled=False,
+            is_qpos_traj=self.is_qpos_traj,
+            is_relative_frame=self.is_relative_frame,
+        )
+
+    @Slot()
+    def stop_trajectory(self):
+        """Stops the ongoing trajectory execution."""
+        with QMutexLocker(self.sim_thread.mutex):
+            self.sim_thread.is_testing = False
+        print("Trajectory execution stopped by user.")
+
+    def save_left_foot_pose(self):
+        with QMutexLocker(self.mutex):
+            self.saved_left_foot_pose = self.sim.get_site_transform("left_foot_center")
+        print("Saved left foot pose!")
+
+    def save_right_foot_pose(self):
+        with QMutexLocker(self.mutex):
+            self.saved_right_foot_pose = self.sim.get_site_transform(
+                "right_foot_center"
+            )
+        print("Saved right foot pose!")
+
+    def apply_left_foot_pose(self):
+        if self.saved_left_foot_pose is None:
+            print("No saved left foot pose.")
+            return
+        self.align_foot_to_pose("left_foot_center", self.saved_left_foot_pose)
+
+    def apply_right_foot_pose(self):
+        if self.saved_right_foot_pose is None:
+            print("No saved right foot pose.")
+            return
+        self.align_foot_to_pose("right_foot_center", self.saved_right_foot_pose)
+
+    def align_foot_to_pose(self, foot_site_name, target_pose):
+        with QMutexLocker(self.mutex):
+            torso_t_curr = self.sim.get_body_transform("torso")
+            foot_t_curr = self.sim.get_site_transform(foot_site_name)
+
+            aligned_torso_t = target_pose @ np.linalg.inv(foot_t_curr) @ torso_t_curr
+
+            self.sim.data.qpos[:3] = aligned_torso_t[:3, 3]
+            self.sim.data.qpos[3:7] = R.from_matrix(aligned_torso_t[:3, :3]).as_quat(
+                scalar_first=True
+            )
+            self.sim.forward()
+        print(f"{foot_site_name} aligned to saved pose.")
+
+    def save_hand_poses(self):
+        left_pos = self.sim.get_site_transform("left_hand_center")[:3, 3]
+        right_pos = self.sim.get_site_transform("right_hand_center")[:3, 3]
+        self.sim.add_ee_marker(left_pos, [0.9, 0.1, 0.1, 0.8])
+        self.sim.add_ee_marker(right_pos, [0.9, 0.1, 0.1, 0.8])
+        print("EE marker saved.")
 
     def add_keyframe(self):
-        """Adds a new keyframe to the keyframe list, ensuring a unique index and name.
+        """Adds a new keyframe to the keyframe list, ensuring a unique name.
 
-        If a keyframe is selected in the listbox, a deep copy of the selected keyframe is created. The new keyframe's name is updated if it contains "default", and a unique index is assigned to it. The new keyframe is then appended to the keyframe list and displayed in the listbox.
+        If a keyframe is selected in the listbox, a deep copy of the selected keyframe is created. The new keyframe's name is updated if it contains "default". The new keyframe is then appended to the keyframe list and displayed in the listbox.
 
         Attributes:
             keyframe_listbox (QListWidget): The listbox widget displaying keyframes.
@@ -901,31 +1368,92 @@ class MuJoCoApp(QMainWindow):
         idx = -1
         if self.keyframe_listbox.selectedItems():
             idx = self.keyframe_listbox.currentRow()
+            original_name = self.keyframes[idx].name
+            base_name = original_name
 
-        new_keyframe = copy.deepcopy(self.keyframes[idx])
-        motion_name = self.motion_name_entry.text()
-        if "default" in new_keyframe.name:
-            new_keyframe.name = motion_name
+            # Collect all existing copy names of the form original_copy_N
+            existing_suffixes = []
+            for kf in self.keyframes:
+                if kf.name.startswith(base_name + "_"):
+                    suffix_str = kf.name[len(base_name) + 1 :]
+                    if suffix_str.isdigit():
+                        existing_suffixes.append(int(suffix_str))
 
-        unique_index = 1
-        keyframe_indices = []
-        for keyframe in self.keyframes:
-            if keyframe.name == new_keyframe.name:
-                keyframe_indices.append(keyframe.index)
+            next_suffix = max(existing_suffixes, default=0) + 1
+            new_name = f"{base_name}_{next_suffix}"
 
-        # Find the minimum unique index
-        while unique_index in keyframe_indices:
-            unique_index += 1
+            new_keyframe = copy.deepcopy(self.keyframes[idx])
+            new_keyframe.name = new_name
+        else:
+            new_keyframe = Keyframe(
+                name="default",
+                motor_pos=np.array(
+                    list(self.robot.default_motor_angles.values()), dtype=np.float32
+                ),
+                joint_pos=np.array(
+                    list(self.robot.default_joint_angles.values()), dtype=np.float32
+                ),
+                qpos=self.sim.home_qpos.copy(),
+            )
 
-        new_keyframe.index = unique_index
         self.keyframes.append(new_keyframe)
-        self.keyframe_listbox.addItem(f"{new_keyframe.name}_{new_keyframe.index}")
+        item = QListWidgetItem(new_keyframe.name)
+        item.setFlags(item.flags() | Qt.ItemIsEditable)
+        self.keyframe_listbox.addItem(item)
+
+    def on_keyframe_name_changed(self, item):
+        row = self.keyframe_listbox.row(item)
+        new_name = item.text().strip()
+
+        if not new_name:
+            self.show_warning("Keyframe name cannot be empty.")
+            item.setText(self.keyframes[row].name)
+            return
+
+        # Prevent duplicates
+        for i, kf in enumerate(self.keyframes):
+            if i != row and kf.name == new_name:
+                self.show_warning(f"Duplicate name '{new_name}' already exists.")
+                item.setText(self.keyframes[row].name)
+                return
+
+        old_name = self.keyframes[row].name
+        self.keyframes[row].name = new_name
+
+        # Update all sequence entries using this keyframe name
+        for i, (name, t) in enumerate(self.sequence_list):
+            if name == old_name:
+                self.sequence_list[i] = (new_name, t)
+
+        # Update sequence list UI in-place (if needed)
+        self.sequence_listbox.blockSignals(True)
+        self.update_sequence_listbox()
+        self.sequence_listbox.blockSignals(False)
+
+    def sync_keyframe_order(self, parent, start, end, dest, row):
+        """Update internal keyframe list to match QListWidget order."""
+        items = []
+        for i in range(self.keyframe_listbox.count()):
+            items.append(self.keyframe_listbox.item(i).text())
+
+        reordered = []
+        for name in items:
+            for kf in self.keyframes:
+                if kf.name == name:
+                    reordered.append(kf)
+                    break
+
+        if len(reordered) == len(self.keyframes):
+            self.keyframes = reordered
+            print("Keyframe order updated.")
+        else:
+            print("[Warning] Mismatch in keyframe reordering logic.")
 
     def remove_keyframe(self):
         """Removes the currently selected keyframe(s) and their associated sequences from the lists.
 
         This method retrieves all selected keyframes from the keyframe listbox and removes them from the `keyframes` list.
-        It also removes any corresponding entries in `sequence_list` where the name follows the pattern "{keyframe.name}_{keyframe.index}".
+        It also removes any corresponding entries in `sequence_list`.
         After removal, it updates the sequence and keyframe listboxes to reflect the changes.
         """
         selected_items = self.keyframe_listbox.selectedItems()
@@ -945,11 +1473,13 @@ class MuJoCoApp(QMainWindow):
             self.sequence_list = [
                 (name, arrival_time)
                 for name, arrival_time in self.sequence_list
-                if name != f"{keyframe.name}_{keyframe.index}"
+                if name != keyframe.name
             ]
 
             # Remove keyframe
             self.keyframes.pop(index)
+
+        self.selected_keyframe -= 1
 
         # Update UI elements
         self.update_sequence_listbox()
@@ -974,7 +1504,7 @@ class MuJoCoApp(QMainWindow):
             self.sim_thread.request_state_data()
 
     @Slot(np.ndarray, np.ndarray, np.ndarray)
-    def update_keyframe_with_signal(self, motor_angles, joint_angles, qpos):
+    def update_keyframe_with_signal(self, motor_pos, joint_pos, qpos):
         """Updates the selected keyframe with new motor angles, joint angles, and position data.
 
         Args:
@@ -985,8 +1515,8 @@ class MuJoCoApp(QMainWindow):
         """
         if hasattr(self, "selected_keyframe"):
             idx = self.selected_keyframe
-            self.keyframes[idx].motor_pos = motor_angles.copy()
-            self.keyframes[idx].joint_pos = joint_angles.copy()
+            self.keyframes[idx].motor_pos = motor_pos.copy()
+            self.keyframes[idx].joint_pos = joint_pos.copy()
             self.keyframes[idx].qpos = qpos.copy()
             print(f"Keyframe {idx} updated!")
 
@@ -1001,15 +1531,14 @@ class MuJoCoApp(QMainWindow):
         """
         if hasattr(self, "selected_keyframe"):
             keyframe = self.keyframes[self.selected_keyframe]
-            dt = float(self.dt_entry.text())
-            self.sim_thread.request_keyframe_test(keyframe, dt)
+            self.sim_thread.request_keyframe_test(keyframe, self.dt)
 
-    def put_feet_on_ground(self):
+    def put_on_ground(self):
         """Requests the simulation thread to place the feet on the ground.
 
         This method sends a request to the simulation thread to ensure that the feet are positioned on the ground. It acts as an interface to the simulation's functionality for managing the feet's contact with the ground.
         """
-        self.sim_thread.request_feet_on_ground()
+        self.sim_thread.request_on_ground()
 
     def on_mirror_checked(self, checked):
         """Sets the reverse mirror checkbox to unchecked if the mirror checkbox is checked.
@@ -1034,6 +1563,14 @@ class MuJoCoApp(QMainWindow):
         if checked:
             self.mirror_checked.setChecked(False)
 
+    def on_collision_geom_checked(self, checked):
+        if checked:
+            self.viewport.opt.geomgroup[3] = 1
+            self.viewport.opt.geomgroup[2] = 0
+        else:
+            self.viewport.opt.geomgroup[3] = 0
+            self.viewport.opt.geomgroup[2] = 1
+
     def add_to_sequence(self):
         """Adds the selected keyframe or sequences to the sequence list with proper timing.
 
@@ -1050,9 +1587,7 @@ class MuJoCoApp(QMainWindow):
             # Normal behavior: Add keyframe if less than one sequence is selected
             if hasattr(self, "selected_keyframe"):
                 keyframe = self.keyframes[self.selected_keyframe]
-                keyframe_name = f"{keyframe.name}_{keyframe.index}"
-                arrival_time = float(self.arrival_time_entry.text())
-                self.sequence_list.append((keyframe_name, arrival_time))
+                self.sequence_list.append((keyframe.name, 0.0))
                 self.update_sequence_listbox()
             return
 
@@ -1062,8 +1597,7 @@ class MuJoCoApp(QMainWindow):
         )
 
         # Use first selected sequence's arrival time
-        arrival_time = float(self.arrival_time_entry.text())
-
+        arrival_time = 0.0
         # Calculate time gap between sequences
         time_gaps = [
             self.sequence_list[selected_indices[i + 1]][1]
@@ -1080,6 +1614,44 @@ class MuJoCoApp(QMainWindow):
                 arrival_time += time_gaps[i]
 
         self.update_sequence_listbox()
+
+    def sync_sequence_order(self, parent, start, end, dest, row):
+        """Update internal sequence_list to match QListWidget order."""
+        new_sequence = []
+        for i in range(self.sequence_listbox.count()):
+            text = self.sequence_listbox.item(i).text()
+            name, time_str = text.split("    t=")
+            arrival_time = float(time_str.strip())
+            new_sequence.append((name.strip(), arrival_time))
+
+        if len(new_sequence) == len(self.sequence_list):
+            self.sequence_list = new_sequence
+            print("Sequence order updated.")
+        else:
+            print("[Warning] Sequence list size mismatch after drag.")
+
+    def edit_sequence_arrival_time(self, item):
+        row = self.sequence_listbox.row(item)
+        name, prev_time_str = item.text().split("    t=")
+        name = name.strip()
+        old_time = float(prev_time_str.strip())
+
+        new_time, ok = QInputDialog.getDouble(
+            self,
+            "Edit Arrival Time",
+            f"Set arrival time for '{name}':",
+            old_time,
+            decimals=4,
+        )
+
+        if ok:
+            delta = new_time - old_time
+            for i in range(row, len(self.sequence_list)):
+                self.sequence_list[i] = (
+                    self.sequence_list[i][0],
+                    self.sequence_list[i][1] + delta,
+                )
+            self.update_sequence_listbox()
 
     def remove_from_sequence(self):
         """Removes the currently selected sequence(s) from the sequence list and updates the listbox.
@@ -1104,96 +1676,6 @@ class MuJoCoApp(QMainWindow):
         # Update UI elements
         self.update_sequence_listbox()
 
-    def update_arrival_time(self):
-        """Updates the arrival time for the selected sequence and adjusts subsequent sequences accordingly.
-
-        This method checks if a sequence is selected and retrieves its current arrival time. It then attempts to parse the new arrival time from the user input. If the input is invalid, a warning is displayed, and the input is reset. If valid, the method updates the arrival times for the selected sequence and all subsequent sequences in the list, and refreshes the sequence list display.
-
-        """
-        if hasattr(self, "selected_sequence"):
-            arrival_time = self.sequence_list[self.selected_sequence][1]
-            arrival_time_text = self.arrival_time_entry.text()
-            try:
-                arrival_time_value = float(arrival_time_text)
-            except ValueError:
-                self.show_warning("The input value is not a valid number!")
-                self.arrival_time_entry.setText("0")
-                return
-
-            for i in range(self.selected_sequence, len(self.sequence_list)):
-                self.sequence_list[i] = (
-                    self.sequence_list[i][0],
-                    self.sequence_list[i][1] + arrival_time_value - arrival_time,
-                )
-
-            self.update_sequence_listbox()
-
-    def move_up(self):
-        """Moves the selected item up in the listbox, either for keyframes or sequences, if applicable.
-
-        This method checks if the keyframe or sequence listbox is focused and has a selected item. If so, it swaps the selected item with the one above it in the list, updates the listbox display, and adjusts the current selection to reflect the new position.
-
-        """
-        if (
-            self.keyframe_listbox.hasFocus()
-            and self.keyframe_listbox.selectedItems()
-            and hasattr(self, "selected_keyframe")
-        ):
-            index = self.selected_keyframe
-            self.keyframes[index - 1], self.keyframes[index] = (
-                self.keyframes[index],
-                self.keyframes[index - 1],
-            )
-            self.update_keyframe_listbox()
-            self.keyframe_listbox.setCurrentRow(index - 1)
-            self.selected_keyframe = index - 1
-        elif (
-            self.sequence_listbox.hasFocus()
-            and self.sequence_listbox.selectedItems()
-            and hasattr(self, "selected_sequence")
-        ):
-            index = self.selected_sequence
-            self.sequence_list[index - 1], self.sequence_list[index] = (
-                self.sequence_list[index],
-                self.sequence_list[index - 1],
-            )
-            self.update_sequence_listbox()
-            self.sequence_listbox.setCurrentRow(index - 1)
-            self.selected_sequence = index - 1
-
-    def move_down(self):
-        """Moves the selected item down in the list.
-
-        This method moves the currently selected keyframe or sequence down by one position in its respective list, if possible. It updates the list and the selection to reflect the change.
-
-        """
-        if (
-            self.keyframe_listbox.hasFocus()
-            and self.keyframe_listbox.selectedItems()
-            and hasattr(self, "selected_keyframe")
-        ):
-            index = self.selected_keyframe
-            self.keyframes[index + 1], self.keyframes[index] = (
-                self.keyframes[index],
-                self.keyframes[index + 1],
-            )
-            self.update_keyframe_listbox()
-            self.keyframe_listbox.setCurrentRow(index + 1)
-            self.selected_keyframe = index + 1
-        elif (
-            self.sequence_listbox.hasFocus()
-            and self.sequence_listbox.selectedItems()
-            and hasattr(self, "selected_sequence")
-        ):
-            index = self.selected_sequence
-            self.sequence_list[index + 1], self.sequence_list[index] = (
-                self.sequence_list[index],
-                self.sequence_list[index + 1],
-            )
-            self.update_sequence_listbox()
-            self.sequence_listbox.setCurrentRow(index + 1)
-            self.selected_sequence = index + 1
-
     def test_trajectory(self):
         """Tests the trajectory of a sequence of keyframes by interpolating motor positions over time and initiating a simulation.
 
@@ -1213,7 +1695,7 @@ class MuJoCoApp(QMainWindow):
         times = []
         for keyframe_name, arrival_time in self.sequence_list:
             for keyframe in self.keyframes:
-                if keyframe_name in f"{keyframe.name}_{keyframe.index}":
+                if keyframe_name == keyframe.name:
                     action_list.append(keyframe.motor_pos)
                     qpos_list.append(keyframe.qpos)
                     times.append(arrival_time)
@@ -1224,13 +1706,12 @@ class MuJoCoApp(QMainWindow):
             return
 
         qpos_start = qpos_list[start_idx]
-        dt = float(self.dt_entry.text())
         enabled = self.physics_enabled.isChecked()
 
         action_arr = np.array(action_list)
         times = np.array(times) - times[0]
 
-        self.traj_times = np.array([t for t in np.arange(0, times[-1], dt)])
+        self.traj_times = np.array([t for t in np.arange(0, times[-1], self.dt)])
         self.action_traj = []
         for t in self.traj_times:
             if t < times[-1]:
@@ -1242,27 +1723,43 @@ class MuJoCoApp(QMainWindow):
 
         traj_start = int(np.searchsorted(self.traj_times, times[start_idx]))
 
+        self.is_qpos_traj = False
+
+        self.is_relative_frame = self.relative_frame_checked.isChecked()
+
         self.sim_thread.request_trajectory_test(
-            qpos_start, self.action_traj[traj_start:], dt, enabled
+            qpos_start,
+            self.action_traj[traj_start:],
+            self.dt,
+            enabled,
+            self.is_qpos_traj,
+            self.is_relative_frame,
         )
 
     @Slot()
-    def update_traj_with_signal(self, ee_traj, root_traj):
-        """Updates the end-effector and root trajectories with the provided signals.
-
-        Args:
-            ee_traj: The new trajectory data for the end-effector.
-            root_traj: The new trajectory data for the root.
-
-        Sets the instance variables `ee_traj` and `root_traj` to the provided trajectory data.
-        """
-        self.ee_traj = ee_traj
-        self.root_traj = root_traj
+    def update_traj_with_signal(
+        self,
+        qpos_replay,
+        body_pos_replay,
+        body_quat_replay,
+        body_lin_vel_replay,
+        body_ang_vel_replay,
+        site_pos_replay,
+        site_quat_replay,
+    ):
+        """Updates the body pose trajectories with the provided signals."""
+        self.qpos_replay = qpos_replay
+        self.body_pos_replay = body_pos_replay
+        self.body_quat_replay = body_quat_replay
+        self.body_lin_vel_replay = body_lin_vel_replay
+        self.body_ang_vel_replay = body_ang_vel_replay
+        self.site_pos_replay = site_pos_replay
+        self.site_quat_replay = site_quat_replay
 
     def save_data(self):
-        """Saves the current motion data and keyframes to specified directories in pickle format.
+        """Saves the current motion data and keyframes to specified directories in lz4 format.
 
-        This method serializes the current state of keyframes, sequences, and trajectories into a dictionary and saves it as a pickle file in the results directory. It also saves the motion data to a separate file in the 'motion' directory, with a prompt to confirm overwriting if the file already exists.
+        This method serializes the current state of keyframes, sequences, and trajectories into a dictionary and saves it as a lz4 file in the results directory. It also saves the motion data to a separate file in the 'motion' directory, with a prompt to confirm overwriting if the file already exists.
 
         """
         result_dict = {}
@@ -1270,28 +1767,40 @@ class MuJoCoApp(QMainWindow):
         for keyframe in self.keyframes:
             saved_keyframes.append(asdict(keyframe))
 
-        result_dict["keyframes"] = saved_keyframes
-        result_dict["sequence"] = self.sequence_list
         result_dict["time"] = self.traj_times
-        result_dict["action_traj"] = self.action_traj
-        result_dict["ee_traj"] = self.ee_traj
-        result_dict["root_traj"] = self.root_traj
+        result_dict["qpos"] = np.array(
+            self.qpos_replay
+        )  # Contains global torso position in qpos[:3]
+        result_dict["body_pos"] = np.array(self.body_pos_replay)
+        result_dict["body_quat"] = np.array(self.body_quat_replay)
+        result_dict["body_lin_vel"] = np.array(self.body_lin_vel_replay)
+        result_dict["body_ang_vel"] = np.array(self.body_ang_vel_replay)
+        result_dict["site_pos"] = np.array(self.site_pos_replay)
+        result_dict["site_quat"] = np.array(self.site_quat_replay)
+
+        if self.is_qpos_traj:
+            result_dict["action"] = None
+        else:
+            result_dict["action"] = np.array(self.action_traj)
+
+        result_dict["keyframes"] = saved_keyframes  # Keep as list of dicts
+        result_dict["timed_sequence"] = self.sequence_list  # Keep as list of tuples
+        result_dict["is_robot_relative_frame"] = self.is_relative_frame
 
         time_str = time.strftime("%Y%m%d_%H%M%S")
-        result_path = os.path.join(self.result_dir, f"{self.task_name}_{time_str}.pkl")
-        with open(result_path, "wb") as f:
-            print(f"Saving the results to {result_path}")
-            pickle.dump(result_dict, f)
+        result_path = os.path.join(self.result_dir, f"{self.task_name}_{time_str}.lz4")
+        print(f"Saving the results to {result_path}")
+        joblib.dump(result_dict, result_path, compress="lz4")
 
         motion_name = self.motion_name_entry.text()
-        motion_file_path = os.path.join("motion", f"{motion_name}.pkl")
+        motion_file_path = os.path.join("motion", f"{motion_name}.lz4")
         # Check if file exists before saving
         if os.path.exists(motion_file_path):
             reply = QMessageBox.question(
                 self,
                 "Overwrite Confirmation",
                 "The file is already saved in the results folder."
-                + f" Do you want to update {motion_name}.pkl in the motion/ directory?",
+                + f" Do you want to update {motion_name}.lz4 in the motion/ directory?",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
             )
@@ -1299,9 +1808,9 @@ class MuJoCoApp(QMainWindow):
                 return  # User canceled, do not save
 
         # Proceed with saving
-        with open(motion_file_path, "wb") as f:
-            print(f"Saving the results to {motion_file_path}")
-            pickle.dump(result_dict, f)
+        print(f"Saving the results to {motion_file_path}...")
+        joblib.dump(result_dict, motion_file_path, compress="lz4")
+        print("The motion data is saved!")
 
     def load_data(self):
         """Loads and processes keyframe data from a specified file path.
@@ -1314,25 +1823,55 @@ class MuJoCoApp(QMainWindow):
         """
         self.keyframes = []
         self.sequence_list = []
-        self.ee_traj = []
-        self.root_traj = []
+        self.qpos_replay = []
+        self.body_pos_replay = []
+        self.body_quat_replay = []
+        self.body_lin_vel_replay = []
+        self.body_ang_vel_replay = []
+        self.site_pos_replay = []
+        self.site_quat_replay = []
         self.keyframe_listbox.clear()
 
         keyframes = []
         if len(self.data_path) > 0:
-            with open(self.data_path, "rb") as f:
-                print(f"Loading inputs from {self.data_path}")
-                data = pickle.load(f)
+            print(f"Loading inputs from {self.data_path}")
+            data = joblib.load(self.data_path)
 
             if isinstance(data, dict):
+                motion_file = os.path.basename(self.data_path)
                 keyframes = [Keyframe(**k) for k in data.get("keyframes", [])]
-                self.sequence_list = data.get("sequence", [])
+                if "2xc" in self.robot.name and "2xc" not in motion_file:
+                    right_hip_roll_idx = self.robot.joint_ordering.index(
+                        "right_hip_roll"
+                    )
+                    mj_right_hip_roll_id = mujoco.mj_name2id(
+                        self.sim.model, mujoco.mjtObj.mjOBJ_JOINT, "right_hip_roll"
+                    )
+                    for kf in keyframes:
+                        kf.joint_pos[right_hip_roll_idx] *= -1
+                        kf.motor_pos[right_hip_roll_idx] *= -1
+                        kf.qpos[self.sim.model.jnt_qposadr[mj_right_hip_roll_id]] *= -1
+                elif "2xm" in self.robot.name and "2xm" not in motion_file:
+                    right_hip_roll_idx = self.robot.joint_ordering.index(
+                        "right_hip_roll"
+                    )
+                    mj_right_hip_roll_id = mujoco.mj_name2id(
+                        self.sim.model, mujoco.mjtObj.mjOBJ_JOINT, "right_hip_roll"
+                    )
+                    for kf in keyframes:
+                        kf.joint_pos[right_hip_roll_idx] *= -1
+                        kf.motor_pos[right_hip_roll_idx] *= -1
+                        kf.qpos[self.sim.model.jnt_qposadr[mj_right_hip_roll_id]] *= -1
+
+                self.sequence_list = data.get("timed_sequence", [])
                 for i, (name, arrival_time) in enumerate(self.sequence_list):
                     self.sequence_list[i] = (name.replace(" ", "_"), arrival_time)
 
                 self.traj_times = data.get("time", [])
-                self.action_traj = data.get("action_traj", [])
+                self.action_traj = data.get("action", [])
+
                 self.update_sequence_listbox()
+
             else:
                 keyframes = data
 
@@ -1343,21 +1882,27 @@ class MuJoCoApp(QMainWindow):
                 )
 
         if len(keyframes) == 0:
-            self.sim.data.qpos = self.sim.default_qpos.copy()
             self.keyframes.append(
                 Keyframe(
-                    "default",
-                    0,
-                    self.sim.get_motor_angles(type="array"),
-                    self.sim.get_joint_angles(type="array"),
-                    self.sim.data.qpos.copy(),
+                    name="default",
+                    motor_pos=np.array(
+                        list(self.robot.default_motor_angles.values()), dtype=np.float32
+                    ),
+                    joint_pos=np.array(
+                        list(self.robot.default_joint_angles.values()), dtype=np.float32
+                    ),
+                    qpos=self.sim.home_qpos.copy(),
                 )
             )
-            self.keyframe_listbox.addItem("default_0")
+            item = QListWidgetItem("default")
+            item.setFlags(item.flags() | Qt.ItemIsEditable)
+            self.keyframe_listbox.addItem(item)
         else:
             for i, keyframe in enumerate(keyframes):
                 self.keyframes.append(keyframe)
-                self.keyframe_listbox.addItem(f"{keyframe.name}_{keyframe.index}")
+                item = QListWidgetItem(f"{keyframe.name}")
+                item.setFlags(item.flags() | Qt.ItemIsEditable)
+                self.keyframe_listbox.addItem(item)
 
     def on_keyframe_select(self):
         """Handles the event when a keyframe is selected from the listbox.
@@ -1371,8 +1916,16 @@ class MuJoCoApp(QMainWindow):
         if self.keyframe_listbox.selectedItems():
             QApplication.setOverrideCursor(Qt.WaitCursor)  # Show "loading" cursor
 
-            self.selected_keyframe = self.keyframe_listbox.currentRow()
+            current_row = self.keyframe_listbox.currentRow()
+            if current_row < 0 or current_row >= len(self.keyframes):
+                QApplication.restoreOverrideCursor()
+                return
+
+            self.selected_keyframe = current_row
             self.load_keyframe()
+
+            if hasattr(self, "selected_sequence"):
+                del self.selected_sequence
 
             keyframe = self.keyframes[self.selected_keyframe]
 
@@ -1407,15 +1960,19 @@ class MuJoCoApp(QMainWindow):
         """
         if self.sequence_listbox.selectedItems():
             self.selected_sequence = self.sequence_listbox.currentRow()
+            if hasattr(self, "selected_keyframe"):
+                del self.selected_keyframe
 
     def update_keyframe_listbox(self):
         """Updates the keyframe listbox with the current keyframes.
 
-        This method clears the existing items in the keyframe listbox and repopulates it with the current keyframes. Each keyframe is displayed in the format "{keyframe.name}_{keyframe.index}".
+        This method clears the existing items in the keyframe listbox and repopulates it with the current keyframes.
         """
         self.keyframe_listbox.clear()
         for keyframe in self.keyframes:
-            self.keyframe_listbox.addItem(f"{keyframe.name}_{keyframe.index}")
+            item = QListWidgetItem(f"{keyframe.name}")
+            item.setFlags(item.flags() | Qt.ItemIsEditable)
+            self.keyframe_listbox.addItem(item)
 
     def update_sequence_listbox(self):
         """Updates the sequence listbox with formatted items from the sequence list.
@@ -1423,10 +1980,11 @@ class MuJoCoApp(QMainWindow):
         This method clears the current contents of the sequence listbox and repopulates it with items from the `sequence_list`. Each item in the listbox is formatted to replace spaces in the name with underscores and includes the arrival time.
         """
         self.sequence_listbox.clear()
+        # self.sequence_list.sort(key=lambda x: x[1])
         for name, arrival_time in self.sequence_list:
-            self.sequence_listbox.addItem(
-                f"{name.replace(' ', '_')}    t={arrival_time}"
-            )
+            item = QListWidgetItem(f"{name.replace(' ', '_')}    t={arrival_time}")
+            item.setFlags(item.flags() | Qt.ItemIsEditable)
+            self.sequence_listbox.addItem(item)
 
     def update_joint_pos(self, joint_name, value):
         """Updates the position of a specified joint and its mirrored counterpart if applicable.
@@ -1480,7 +2038,6 @@ class MuJoCoApp(QMainWindow):
         slider = self.joint_sliders[joint_name]
         value_label = self.joint_labels[joint_name]
 
-        # TODO: self.robot.joint_limits[] or robot.joint_limits[]?
         joint_range = self.robot.joint_limits[joint_name]
         slider_value = np.interp(slider.value(), self.normalized_range, joint_range)
 
@@ -1496,6 +2053,29 @@ class MuJoCoApp(QMainWindow):
                 self.joint_sliders[name].setValue(
                     int(np.interp(value, joint_range, self.normalized_range))
                 )
+
+    def on_joint_slider_moving(self, joint_name, value):
+        slider = self.joint_sliders[joint_name]
+        joint_range = self.robot.joint_limits[joint_name]
+        slider_value = np.interp(slider.value(), self.normalized_range, joint_range)
+
+        # Compute motor updates (main + mirrored if mirror/rev-mirror enabled)
+        joint_angles_to_update = self.update_joint_pos(joint_name, slider_value)
+
+        for name, angle in joint_angles_to_update.items():
+            # Update label
+            self.joint_labels[name].setText(f"{angle:.2f}")
+
+            # Update slider visually only if this is a different joint
+            if name != joint_name:
+                joint_range = self.robot.joint_limits[name]
+                slider_value = int(np.interp(angle, joint_range, self.normalized_range))
+                mirror_slider = self.joint_sliders[name]
+
+                # Block signals to prevent another on_joint_slider_moving from being called
+                mirror_slider.blockSignals(True)
+                mirror_slider.setValue(slider_value)
+                mirror_slider.blockSignals(False)
 
     def on_joint_label_change(self, joint_name):
         """Handles changes to the joint label by validating and updating the joint's position.
@@ -1557,7 +2137,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--robot",
         type=str,
-        default="toddlerbot",
+        default="toddlerbot_2xc",
         help="The name of the robot. Need to match the name in descriptions.",
     )
     parser.add_argument(
@@ -1574,12 +2154,24 @@ if __name__ == "__main__":
         + "If the same as the task name, a copy of the data in the motion folder will be created in the results folder."
         + "Othewerwise, please make sure this is a valid folder name inside the results folder.",
     )
+    parser.add_argument(
+        "--scene",
+        type=str,
+        default="",
+        help="Scene to load (e.g., 'scene', 'scene_climb_up_box').",
+    )
     args = parser.parse_args()
 
     app = QApplication()
 
     robot = Robot(args.robot)
-    sim = MuJoCoSim(robot, vis_type="none")
+    if len(args.scene) > 0:
+        xml_path = os.path.join(
+            "toddlerbot", "descriptions", robot.name, args.scene + ".xml"
+        )
+    else:
+        xml_path = ""
+    sim = MuJoCoSim(robot, xml_path=xml_path, vis_type="none")
 
     window = MuJoCoApp(sim, robot, args.task, args.run_name)
     window.show()

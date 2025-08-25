@@ -1,15 +1,24 @@
-from typing import Any, Optional
+"""Walking locomotion environment for ToddlerBot.
+
+This module provides the WalkEnv class for training ToddlerBot in bipedal walking.
+The environment includes specialized reward functions for stability, gait patterns,
+and command following using ZMP (Zero Moment Point) reference trajectories.
+"""
+
+from typing import Any, List, Optional
 
 import jax
 import jax.numpy as jnp
+import mujoco
+import numpy
 from brax import base
+from brax.envs.base import State
+from jax.scipy.spatial.transform import Rotation as R
 
 from toddlerbot.locomotion.mjx_config import MJXConfig
 from toddlerbot.locomotion.mjx_env import MJXEnv
-from toddlerbot.reference.walk_simple_ref import WalkSimpleReference
 from toddlerbot.reference.walk_zmp_ref import WalkZMPReference
 from toddlerbot.sim.robot import Robot
-from toddlerbot.utils.math_utils import quat2euler, quat_inv, rotate_vec
 
 
 class WalkEnv(MJXEnv, env_name="walk"):
@@ -22,7 +31,6 @@ class WalkEnv(MJXEnv, env_name="walk"):
         cfg: MJXConfig,
         ref_motion_type: str = "zmp",
         fixed_base: bool = False,
-        add_noise: bool = True,
         add_domain_rand: bool = True,
         **kwargs: Any,
     ):
@@ -32,28 +40,20 @@ class WalkEnv(MJXEnv, env_name="walk"):
             name (str): The name of the controller.
             robot (Robot): The robot instance to be controlled.
             cfg (MJXConfig): Configuration settings for the controller.
-            ref_motion_type (str, optional): Type of motion reference to use, either 'simple' or 'zmp'. Defaults to 'zmp'.
+            ref_motion_type (str, optional): Type of motion reference to use. Defaults to 'zmp'.
             fixed_base (bool, optional): Indicates if the robot has a fixed base. Defaults to False.
-            add_noise (bool, optional): Whether to add noise to the simulation. Defaults to True.
             add_domain_rand (bool, optional): Whether to add domain randomization. Defaults to True.
             **kwargs (Any): Additional keyword arguments for the superclass initializer.
 
         Raises:
             ValueError: If an unknown `ref_motion_type` is provided.
         """
-        motion_ref: WalkSimpleReference | WalkZMPReference | None = None
-
-        if ref_motion_type == "simple":
-            motion_ref = WalkSimpleReference(
-                robot, cfg.sim.timestep * cfg.action.n_frames, cfg.action.cycle_time
-            )
-
-        elif ref_motion_type == "zmp":
+        if ref_motion_type == "zmp":
             motion_ref = WalkZMPReference(
                 robot,
                 cfg.sim.timestep * cfg.action.n_frames,
                 cfg.action.cycle_time,
-                cfg.action.waist_roll_max,
+                fixed_base=fixed_base,
             )
         else:
             raise ValueError(f"Unknown ref_motion_type: {ref_motion_type}")
@@ -62,7 +62,6 @@ class WalkEnv(MJXEnv, env_name="walk"):
         self.torso_roll_range = cfg.rewards.torso_roll_range
         self.torso_pitch_range = cfg.rewards.torso_pitch_range
 
-        self.max_feet_air_time = self.cycle_time / 2.0
         self.min_feet_y_dist = cfg.rewards.min_feet_y_dist
         self.max_feet_y_dist = cfg.rewards.max_feet_y_dist
 
@@ -72,10 +71,71 @@ class WalkEnv(MJXEnv, env_name="walk"):
             cfg,
             motion_ref,
             fixed_base=fixed_base,
-            add_noise=add_noise,
             add_domain_rand=add_domain_rand,
             **kwargs,
         )
+
+    def visualize_path_frame(self, renderer, pos, rot, axis_len=0.2, alpha=0.5):
+        """Visualize coordinate frame axes in the renderer for debugging."""
+        colors = {
+            "x": [1, 0, 0, alpha],  # red
+            "y": [0, 1, 0, alpha],  # green
+            "z": [0, 0, 1, alpha],  # blue
+        }
+        axes = {
+            "x": rot.apply(jnp.array([axis_len, 0, 0])),
+            "y": rot.apply(jnp.array([0, axis_len, 0])),
+            "z": rot.apply(jnp.array([0, 0, axis_len])),
+        }
+
+        for key in ["x", "y", "z"]:
+            p1 = pos
+            p2 = pos + axes[key]
+            i = renderer.scene.ngeom
+            geom = renderer.scene.geoms[i]
+            mujoco.mjv_initGeom(
+                geom,
+                type=mujoco.mjtGeom.mjGEOM_LINE,
+                size=numpy.zeros(3),
+                pos=numpy.zeros(3),
+                mat=numpy.eye(3).flatten(),
+                rgba=colors[key],
+            )
+            mujoco.mjv_connector(geom, mujoco.mjtGeom.mjGEOM_LINE, 5, p1, p2)
+            renderer.scene.ngeom += 1
+
+    def render(
+        self,
+        states: List[State],
+        height: int = 240,
+        width: int = 320,
+        camera: Optional[str] = None,
+    ):
+        """Render environment states with path visualization and force arrows."""
+        renderer = mujoco.Renderer(self.sys.mj_model, height=height, width=width)
+        camera = camera or -1
+
+        push_id = states[0].info["push_id"]
+        push_force = numpy.concatenate([states[0].info["push"], numpy.zeros(1)])
+        image_list = []
+        for state in states:
+            d = mujoco.MjData(self.sys.mj_model)
+            d.qpos, d.qvel = state.pipeline_state.q, state.pipeline_state.qd
+            mujoco.mj_forward(self.sys.mj_model, d)
+            renderer.update_scene(d, camera=camera)
+            if numpy.linalg.norm(state.info["push"]) > 0:
+                push_id = state.info["push_id"]
+                push_force = numpy.concatenate([state.info["push"], numpy.zeros(1)])
+
+            self.visualize_path_frame(
+                renderer,
+                state.info["state_ref"]["path_pos"],
+                state.info["state_ref"]["path_rot"],
+            )
+            self.visualize_force_arrow(renderer, state, push_id, push_force)
+            image_list.append(renderer.render())
+
+        return image_list
 
     def _sample_command(
         self, rng: jax.Array, last_command: Optional[jax.Array] = None
@@ -113,13 +173,13 @@ class WalkEnv(MJXEnv, env_name="walk"):
                 jnp.sin(theta) > 0, self.command_range[5][1], -self.command_range[5][0]
             )
             x = jax.random.uniform(
-                rng_4, (1,), minval=self.deadzone, maxval=x_max
+                rng_4, (1,), minval=self.deadzone[0], maxval=x_max
             ) * jnp.sin(theta)
             y_max = jnp.where(
                 jnp.cos(theta) > 0, self.command_range[6][1], -self.command_range[6][0]
             )
             y = jax.random.uniform(
-                rng_4, (1,), minval=self.deadzone, maxval=y_max
+                rng_4, (1,), minval=self.deadzone[1], maxval=y_max
             ) * jnp.cos(theta)
             z = jnp.zeros(1)
             return jnp.concatenate([x, y, z])
@@ -137,13 +197,13 @@ class WalkEnv(MJXEnv, env_name="walk"):
                 jax.random.uniform(
                     rng_6,
                     (1,),
-                    minval=self.deadzone,
+                    minval=self.deadzone[2],
                     maxval=self.command_range[7][1],
                 ),
                 -jax.random.uniform(
                     rng_6,
                     (1,),
-                    minval=self.deadzone,
+                    minval=self.deadzone[2],
                     maxval=-self.command_range[7][0],
                 ),
             )
@@ -162,9 +222,10 @@ class WalkEnv(MJXEnv, env_name="walk"):
         command = jnp.concatenate([pose_command, walk_command])
 
         # jax.debug.print("command: {}", command)
-
+        # return jnp.array([0, 0, 0, 0, 0, 0.1, 0.1, 0])
         return command
 
+    # ZMP-based reward functions
     def _reward_torso_roll(
         self, pipeline_state: base.State, info: dict[str, Any], action: jax.Array
     ):
@@ -180,8 +241,10 @@ class WalkEnv(MJXEnv, env_name="walk"):
         Returns:
             jax.Array: A scalar reward value based on the torso's roll angle.
         """
-        torso_quat = pipeline_state.x.rot[0]
-        torso_roll = quat2euler(torso_quat)[0]
+        torso_rot = R.from_quat(
+            jnp.concatenate([pipeline_state.x.rot[0][1:], pipeline_state.x.rot[0][:1]])
+        )
+        torso_roll = torso_rot.as_euler("xyz")[0]
 
         roll_min = jnp.clip(torso_roll - self.torso_roll_range[0], max=0.0)
         roll_max = jnp.clip(torso_roll - self.torso_roll_range[1], min=0.0)
@@ -205,8 +268,10 @@ class WalkEnv(MJXEnv, env_name="walk"):
         Returns:
             jax.Array: A scalar reward value that decreases as the torso pitch deviates from the specified range.
         """
-        torso_quat = pipeline_state.x.rot[0]
-        torso_pitch = quat2euler(torso_quat)[1]
+        torso_rot = R.from_quat(
+            jnp.concatenate([pipeline_state.x.rot[0][1:], pipeline_state.x.rot[0][:1]])
+        )
+        torso_pitch = torso_rot.as_euler("xyz")[1]
 
         pitch_min = jnp.clip(torso_pitch - self.torso_pitch_range[0], max=0.0)
         pitch_max = jnp.clip(torso_pitch - self.torso_pitch_range[1], min=0.0)
@@ -234,7 +299,7 @@ class WalkEnv(MJXEnv, env_name="walk"):
         first_contact = (info["feet_air_time"] > 0) * contact_filter
         reward = jnp.sum(info["feet_air_time"] * first_contact)
         # no reward for zero command
-        reward *= jnp.linalg.norm(info["command_obs"]) > self.deadzone
+        reward *= jnp.linalg.norm(info["command_obs"]) > 1e-6
         return reward
 
     def _reward_feet_clearance(
@@ -260,7 +325,7 @@ class WalkEnv(MJXEnv, env_name="walk"):
         first_contact = (info["feet_air_dist"] > 0) * contact_filter
         reward = jnp.sum(info["feet_air_dist"] * first_contact)
         # no reward for zero command
-        reward *= jnp.linalg.norm(info["command_obs"]) > self.deadzone
+        reward *= jnp.linalg.norm(info["command_obs"]) > 1e-6
         return reward
 
     def _reward_feet_distance(
@@ -278,12 +343,15 @@ class WalkEnv(MJXEnv, env_name="walk"):
         """
         # Calculates the reward based on the distance between the feet.
         # Penalize feet get close to each other or too far away on the y axis
-        feet_vec = rotate_vec(
-            pipeline_state.x.pos[self.feet_link_ids[0]]
-            - pipeline_state.x.pos[self.feet_link_ids[1]],
-            quat_inv(pipeline_state.x.rot[0]),
+        torso_rot = R.from_quat(
+            jnp.concatenate([pipeline_state.x.rot[0][1:], pipeline_state.x.rot[0][:1]])
         )
-        feet_dist = jnp.abs(feet_vec[1])
+        feet_vec = (
+            pipeline_state.x.pos[self.feet_link_ids[0]]
+            - pipeline_state.x.pos[self.feet_link_ids[1]]
+        )
+        feet_vec_rotated = torso_rot.inv().apply(feet_vec)
+        feet_dist = jnp.abs(feet_vec_rotated[1])
         d_min = jnp.clip(feet_dist - self.min_feet_y_dist, max=0.0)
         d_max = jnp.clip(feet_dist - self.max_feet_y_dist, min=0.0)
         reward = (jnp.exp(-jnp.abs(d_min) * 100) + jnp.exp(-jnp.abs(d_max) * 100)) / 2
@@ -331,7 +399,7 @@ class WalkEnv(MJXEnv, env_name="walk"):
             )
         )
         reward = -(qpos_diff**2)
-        reward *= jnp.linalg.norm(info["command_obs"]) < self.deadzone
+        reward *= jnp.linalg.norm(info["command_obs"]) < 1e-6
         return reward
 
     def _reward_align_ground(

@@ -1,36 +1,39 @@
+"""Joystick-based teleoperation policy with multi-mode switching.
+
+This module implements a comprehensive joystick control system that dynamically
+switches between different behavior policies (walk, teleop, reset, etc.) based on user input.
+"""
+
 import os
 from typing import Any, Dict, Tuple
 
 import joblib
 import numpy as np
 import numpy.typing as npt
+from moviepy.editor import ImageSequenceClip
 
 from toddlerbot.policies import BasePolicy
 from toddlerbot.policies.balance_pd import BalancePDPolicy
+from toddlerbot.policies.dp_policy import DPPolicy
 from toddlerbot.policies.mjx_policy import MJXPolicy
+from toddlerbot.policies.replay import ReplayPolicy
 from toddlerbot.policies.reset_pd import ResetPDPolicy
 from toddlerbot.policies.teleop_follower_pd import TeleopFollowerPDPolicy
 from toddlerbot.policies.walk import WalkPolicy
 from toddlerbot.sensing.camera import Camera
-from toddlerbot.sim import Obs
+from toddlerbot.sim import BaseSim, Obs
 from toddlerbot.sim.robot import Robot
 from toddlerbot.tools.joystick import Joystick
 from toddlerbot.utils.comm_utils import ZMQNode
-from toddlerbot.policies.dp_policy import DPPolicy
-from toddlerbot.policies.push_cart import PushCartPolicy
-from toddlerbot.policies.replay import ReplayPolicy
-
-# Run this script on Jetson and run toddlerbot/tools/teleoperate.py on the remote controller
-# in the puppeteering mode to control the robot.
 
 
-class TeleopJoystickPolicy(BasePolicy, policy_name="teleop_joystick"):
+class TeleopJoystickPolicy(BasePolicy):
     def __init__(
         self,
         name: str,
         robot: Robot,
         init_motor_pos: npt.NDArray[np.float32],
-        ip: str,
+        ip: str = "",
         run_name: str = "",
     ):
         """Initializes the class with the specified parameters and sets up various components and policies for robot control.
@@ -105,7 +108,6 @@ class TeleopJoystickPolicy(BasePolicy, policy_name="teleop_joystick"):
                 **balance_kwargs,
             )
             self.hug_policy = self.teleop_policy
-            self.push_cart_policy = self.teleop_policy
         else:
             self.pick_policy = self.teleop_policy  # type: ignore
             self.hug_policy = DPPolicy(  # type: ignore
@@ -114,13 +116,6 @@ class TeleopJoystickPolicy(BasePolicy, policy_name="teleop_joystick"):
                 init_motor_pos,
                 ckpt="20250109_235450",
                 task="hug",
-                **balance_kwargs,
-            )
-            self.push_cart_policy = PushCartPolicy(  # type: ignore
-                "push_cart",
-                robot,
-                init_motor_pos,
-                ckpt="20250106_232754",
                 **balance_kwargs,
             )
         self.cuddle_policy = ReplayPolicy(
@@ -132,7 +127,6 @@ class TeleopJoystickPolicy(BasePolicy, policy_name="teleop_joystick"):
             "reset": self.reset_policy,
             "hug": self.hug_policy,
             "pick": self.pick_policy,
-            "push_cart": self.push_cart_policy,
             "cuddle": self.cuddle_policy,
         }
 
@@ -143,7 +137,7 @@ class TeleopJoystickPolicy(BasePolicy, policy_name="teleop_joystick"):
         self.step_curr = 0
 
     def step(
-        self, obs: Obs, is_real: bool = False
+        self, obs: Obs, sim: BaseSim
     ) -> Tuple[Dict[str, float], npt.NDArray[np.float32]]:
         """Processes the current observation and determines the appropriate control inputs and motor targets based on the active policy.
 
@@ -195,9 +189,6 @@ class TeleopJoystickPolicy(BasePolicy, policy_name="teleop_joystick"):
                     curr_policy, ReplayPolicy
                 ):
                     curr_policy.time_start = obs.time
-                elif isinstance(curr_policy, PushCartPolicy):
-                    curr_policy.time_start = obs.time
-                    curr_policy.grasp_policy.time_start = obs.time
             else:
                 if isinstance(last_policy, MJXPolicy) and not last_policy.is_standing:
                     # Not ready for switching policy
@@ -222,11 +213,7 @@ class TeleopJoystickPolicy(BasePolicy, policy_name="teleop_joystick"):
         elif isinstance(selected_policy, MJXPolicy):
             selected_policy.control_inputs = control_inputs
 
-        elif isinstance(selected_policy, PushCartPolicy):
-            selected_policy.walk_policy.control_inputs = control_inputs
-            selected_policy.grasp_policy.msg = msg
-
-        _, motor_target = selected_policy.step(obs, is_real)
+        _, motor_target = selected_policy.step(obs, sim)
 
         print(f"policy: {policy_curr}")
         # print(f"control_inputs: {control_inputs}")
@@ -240,3 +227,22 @@ class TeleopJoystickPolicy(BasePolicy, policy_name="teleop_joystick"):
         self.step_curr += 1
 
         return control_inputs, motor_target
+
+    def close(self, exp_folder_path: str):
+        """Save recorded camera frames from manipulation policies as videos."""
+        policy_dict = {
+            "hug": self.hug_policy,
+            "pick": self.pick_policy,
+            "grasp": self.teleop_policy,
+        }
+        for task_name, task_policy in policy_dict.items():
+            if (
+                not isinstance(task_policy, DPPolicy)
+                or len(task_policy.camera_frame_list) == 0
+            ):
+                continue
+
+            video_path = os.path.join(exp_folder_path, f"{task_name}_visual_obs.mp4")
+            fps = int(1 / np.diff(task_policy.camera_time_list).mean())
+            video_clip = ImageSequenceClip(task_policy.camera_frame_list, fps=fps)
+            video_clip.write_videofile(video_path, codec="libx264", fps=fps)

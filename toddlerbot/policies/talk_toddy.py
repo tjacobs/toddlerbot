@@ -1,3 +1,9 @@
+"""Toddy conversational AI policy with action integration.
+
+This module implements the Toddy personality for speech interaction combined
+with physical actions like push-ups, integrating conversation with motion.
+"""
+
 import asyncio
 import base64
 import threading
@@ -15,11 +21,11 @@ from toddlerbot.policies import BasePolicy
 from toddlerbot.policies.replay import ReplayPolicy
 from toddlerbot.sensing.microphone import Microphone
 from toddlerbot.sensing.speaker import Speaker
-from toddlerbot.sim import Obs
+from toddlerbot.sim import BaseSim, Obs
 from toddlerbot.sim.robot import Robot
 from toddlerbot.tools.audio_player_async import AudioPlayerAsync
 from toddlerbot.utils.comm_utils import ZMQMessage, ZMQNode
-from toddlerbot.utils.math_utils import interpolate_action
+from toddlerbot.utils.math_utils import get_action_traj, interpolate_action
 
 CHANNELS = 1
 SAMPLE_RATE = 24000
@@ -84,7 +90,7 @@ def start_async_task(task):
     loop.run_until_complete(task())
 
 
-class TalkToddyPolicy(BasePolicy, policy_name="talk_toddy"):
+class TalkToddyPolicy(BasePolicy):
     client: AsyncOpenAI
     should_send_audio: asyncio.Event
     audio_player: AudioPlayerAsync
@@ -302,7 +308,7 @@ class TalkToddyPolicy(BasePolicy, policy_name="talk_toddy"):
             self.should_send_audio.set()
             self.is_recording = True
 
-    def step(self, obs: Obs, is_real: bool = False):
+    def step(self, obs: Obs, sim: BaseSim):
         """Executes a step in the control loop, handling preparation, push-up actions, and communication.
 
         Args:
@@ -314,12 +320,14 @@ class TalkToddyPolicy(BasePolicy, policy_name="talk_toddy"):
         """
         if not self.is_prepared:
             self.is_prepared = True
+            is_real = "real" in sim.name
             self.prep_duration = 12.0 if is_real else 2.0
-            self.prep_time, self.prep_action = self.move(
-                -self.control_dt,
+            self.prep_time, self.prep_action = get_action_traj(
+                0.0,
                 self.init_motor_pos,
                 self.default_motor_pos,
                 self.prep_duration,
+                self.control_dt,
                 end_time=10.0 if is_real else 0.0,
             )
 
@@ -342,7 +350,7 @@ class TalkToddyPolicy(BasePolicy, policy_name="talk_toddy"):
                 return self.pushup_policy.step(obs, is_real)
 
         send_msg = ZMQMessage(
-            time=time.time(),
+            time=time.monotonic(),
             control_inputs={"listen": int(self.audio_player.is_playing())},
         )
         self.zmq_sender.send_msg(send_msg)

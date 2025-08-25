@@ -1,3 +1,9 @@
+"""TensorRT-accelerated stereo depth estimation using Foundation Stereo model.
+
+This module provides stereo depth estimation capabilities using a TensorRT engine
+for high-performance inference with camera calibration and rectification support.
+"""
+
 import atexit
 import pickle
 from dataclasses import dataclass
@@ -19,23 +25,33 @@ from toddlerbot.depth.depth_utils import (
 from toddlerbot.sensing.camera import Camera
 from toddlerbot.utils.misc_utils import log, profile
 
-# Initialize CUDA context
-cuda.init()
-cuda.Device(0).retain_primary_context().push()
-atexit.register(cuda.Context.pop)
-CUDA_STREAM = torch.cuda.Stream()
+# Initialize CUDA context (gracefully handle missing CUDA)
+try:
+    cuda.init()
+    cuda.Device(0).retain_primary_context().push()
+    atexit.register(cuda.Context.pop)
+    CUDA_STREAM = torch.cuda.Stream()
 
-# Normalization constants borrowed from ImageNet. Used for pre-processing before inference.
-MEAN = torch.tensor([0.485, 0.456, 0.406], device="cuda")[:, None, None]
-STD = torch.tensor([0.229, 0.224, 0.225], device="cuda")[:, None, None]
+    # Normalization constants borrowed from ImageNet. Used for pre-processing before inference.
+    MEAN = torch.tensor([0.485, 0.456, 0.406], device="cuda")[:, None, None]
+    STD = torch.tensor([0.229, 0.224, 0.225], device="cuda")[:, None, None]
 
-# Initialize TensorRT logger
-TRT_LOGGER = trt.Logger(trt.Logger.ERROR)
-trt.init_libnvinfer_plugins(TRT_LOGGER, "")
+    # Initialize TensorRT logger
+    TRT_LOGGER = trt.Logger(trt.Logger.ERROR)
+    trt.init_libnvinfer_plugins(TRT_LOGGER, "")
+    CUDA_AVAILABLE = True
+except (RuntimeError, ImportError, AttributeError) as e:
+    # Handle cases where CUDA/TensorRT is not available
+    CUDA_STREAM = None
+    MEAN = torch.tensor([0.485, 0.456, 0.406])[:, None, None]
+    STD = torch.tensor([0.229, 0.224, 0.225])[:, None, None]
+    TRT_LOGGER = None
+    CUDA_AVAILABLE = False
+    print(f"Warning: CUDA/TensorRT not available for depth estimation: {e}")
 
 
 def gpu_preproc(img: Image.Image) -> torch.Tensor:
-    """preprocess image for tensorrt engine"""
+    """Preprocess PIL Image for TensorRT inference with GPU normalization."""
     arr = np.asarray(img, np.uint8).copy()
     t = torch.as_tensor(arr, device="cuda").permute(2, 0, 1).unsqueeze_(0).float()
     t.sub_(MEAN).div_(STD)  # normalize
@@ -43,7 +59,7 @@ def gpu_preproc(img: Image.Image) -> torch.Tensor:
 
 
 def pad_to_multiple(t: torch.Tensor, k: int = 32) -> Tuple[torch.Tensor, int, int]:
-    """pad tensor to multiple of k"""
+    """Pad tensor dimensions to nearest multiple of k for model requirements."""
     _, _, h, w = t.shape
     ph = (k - h % k) % k
     pw = (k - w % k) % k
@@ -161,13 +177,41 @@ class DepthEstimatorFoundationStereo:
             assert np.isclose(scale_factor, self.height / calib_height), (
                 f"Scale factor must be the same for both width and height: {scale_factor} != {self.height / calib_height}"
             )
-            self.scaled_K = self.K1.copy()
-            self.scaled_K[:2] *= scale_factor
-            T = (calib_params["T"],)
-            self.baseline = np.linalg.norm(T)
+            # self.scaled_K = self.K1.copy()
+            # self.scaled_K[:2] *= scale_factor
+            self.T = (calib_params["T"],)
+            self.baseline = np.linalg.norm(self.T)
+            if self.T[0][0] < 0:
+                self.scaled_K = self.K1.copy()
+                self.scaled_K[:2] *= scale_factor
+            elif self.T[0][0] > 0:
+                self.scaled_K = self.K2.copy()
+                self.scaled_K[:2] *= scale_factor
+            else:
+                raise ValueError("Baseline is zero")
 
         with open(rec_params_path, "rb") as f:
             rec_params = pickle.load(f)
+
+            # P1 and P2 are the same except P2[0,3]
+            self.P1 = rec_params["P1"]
+            scale_factor = self.width / calib_width
+            scaled_rectified_fx = (
+                self.P1[0, 0] * scale_factor
+            )  # Focal length from P1 matrix
+            scaled_rectified_fy = self.P1[1, 1] * scale_factor
+            scaled_rectified_cx = self.P1[0, 2] * scale_factor
+            scaled_rectified_cy = self.P1[1, 2] * scale_factor
+            self.scaled_rectified_K = np.array(
+                [
+                    [scaled_rectified_fx, 0, scaled_rectified_cx],
+                    [0, scaled_rectified_fy, scaled_rectified_cy],
+                    [0, 0, 1],
+                ]
+            )
+
+            # Pre-compute the full numerator for maximum speed in the inference loop
+            self.fx_times_baseline = scaled_rectified_fx * self.baseline
 
         self.map1_left, self.map2_left, self.map1_right, self.map2_right = (
             get_rectification_maps(
@@ -342,7 +386,18 @@ class DepthEstimatorFoundationStereo:
         rectified_right = img_right.copy() if return_all else None
 
         # Depth inference
-        disparity: np.ndarray = next(iter(self._infer(img_left, img_right).values()))
+        # Switch the order when the sign of the baseline is positive which means right images are rectified to the left side on the baseline
+        # disparity: np.ndarray = next(iter(self._infer(img_left, img_right).values()))
+        if self.T[0][0] < 0:
+            disparity: np.ndarray = next(
+                iter(self._infer(img_left, img_right).values())
+            )
+        elif self.T[0][0] > 0:
+            disparity: np.ndarray = next(
+                iter(self._infer(img_right, img_left).values())
+            )
+        else:
+            raise ValueError("Baseline is zero")
 
         if remove_invisible:
             xx = np.arange(disparity.shape[1])[None, :]
@@ -350,9 +405,10 @@ class DepthEstimatorFoundationStereo:
             disparity = disparity.copy()
             disparity[invalid] = np.inf
 
-        depth: np.ndarray = (
-            self.scaled_K[0, 0] * self.baseline / disparity
-        )  # z = f*B / disparity
+        # depth: np.ndarray = (
+        #     self.scaled_K[0, 0] * self.baseline / disparity
+        # )  # z = f*B / disparity
+        depth: np.ndarray = self.fx_times_baseline / disparity
 
         return DepthResult(
             depth=depth,
@@ -388,7 +444,10 @@ class DepthEstimatorFoundationStereo:
         Returns:
             Point cloud (open3d.geometry.PointCloud)
         """
-        xyz_map = depth_to_xyzmap(depth, self.scaled_K, zmin=zmim)
+        # xyz_map = depth_to_xyzmap(depth, self.scaled_K, zmin=zmim)
+        # TODO: Use cv2.reprojectImageTo3D using disparity and Q matrix instead?
+        xyz_map = depth_to_xyzmap(depth, self.scaled_rectified_K, zmin=zmim)
+
         if is_BGR:
             resized_image = cv2.cvtColor(resized_image, cv2.COLOR_BGR2RGB)
 

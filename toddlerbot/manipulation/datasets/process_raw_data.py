@@ -1,3 +1,5 @@
+"""Process raw teleop data into formatted datasets for diffusion policy training."""
+
 import argparse
 import os
 from typing import List
@@ -10,8 +12,6 @@ from tqdm import tqdm
 from toddlerbot.manipulation.utils.dataset_utils import create_video_grid
 from toddlerbot.sim.robot import Robot
 from toddlerbot.visualization.vis_plot import plot_teleop_dataset
-
-# This script processes raw data to create a dataset to train the diffusion policy.
 
 
 def process_raw_dataset(
@@ -180,7 +180,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--robot",
         type=str,
-        default="toddlerbot",
+        default="toddlerbot_2xc",
         help="The name of the robot. Need to match the name in descriptions.",
         choices=["toddlerbot", "toddlerbot_gripper"],
     )

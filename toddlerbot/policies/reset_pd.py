@@ -1,3 +1,9 @@
+"""Robot reset policy for returning to default configuration.
+
+This module implements a reset policy that safely returns the robot
+to its default position using controlled movement trajectories.
+"""
+
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -5,14 +11,14 @@ import numpy.typing as npt
 
 from toddlerbot.policies.balance_pd import BalancePDPolicy
 from toddlerbot.sensing.camera import Camera
-from toddlerbot.sim import Obs
+from toddlerbot.sim import BaseSim, Obs
 from toddlerbot.sim.robot import Robot
 from toddlerbot.tools.joystick import Joystick
 from toddlerbot.utils.comm_utils import ZMQNode
-from toddlerbot.utils.math_utils import interpolate_action
+from toddlerbot.utils.math_utils import interpolate_action, get_action_traj
 
 
-class ResetPDPolicy(BalancePDPolicy, policy_name="reset_pd"):
+class ResetPDPolicy(BalancePDPolicy):
     """Policy for resetting the robot to the default position."""
 
     def __init__(
@@ -69,7 +75,7 @@ class ResetPDPolicy(BalancePDPolicy, policy_name="reset_pd"):
         return obs.motor_pos[self.arm_motor_indices]
 
     def step(
-        self, obs: Obs, is_real: bool = False
+        self, obs: Obs, sim: BaseSim
     ) -> Tuple[Dict[str, float], npt.NDArray[np.float32]]:
         """Executes a control step for a robotic system, managing motor positions and reset sequences.
 
@@ -90,22 +96,24 @@ class ResetPDPolicy(BalancePDPolicy, policy_name="reset_pd"):
                 upright_duration = np.max(
                     np.abs((upright_motor_pos - obs.motor_pos) / self.reset_vel)
                 )
-                reset_time_upright, reset_action_upright = self.move(
-                    obs.time - self.control_dt,
+                reset_time_upright, reset_action_upright = get_action_traj(
+                    obs.time,
                     obs.motor_pos,
                     upright_motor_pos,
                     upright_duration,
+                    self.control_dt,
                 )
                 reset_duration = np.max(
                     np.abs(
                         (self.default_motor_pos - upright_motor_pos) / self.reset_vel
                     )
                 )
-                reset_time_default, reset_action_default = self.move(
-                    reset_time_upright[-1],
+                reset_time_default, reset_action_default = get_action_traj(
+                    reset_time_upright[-1] + self.control_dt,
                     upright_motor_pos,
                     self.default_motor_pos,
                     reset_duration,
+                    self.control_dt,
                     end_time=0.5,
                 )
                 self.reset_time = np.concatenate(
@@ -118,15 +126,16 @@ class ResetPDPolicy(BalancePDPolicy, policy_name="reset_pd"):
                 reset_duration = np.max(
                     np.abs((self.default_motor_pos - obs.motor_pos) / self.reset_vel)
                 )
-                self.reset_time, self.reset_action = self.move(
-                    obs.time - self.control_dt,
+                self.reset_time, self.reset_action = get_action_traj(
+                    obs.time,
                     obs.motor_pos,
                     self.default_motor_pos,
                     reset_duration,
+                    self.control_dt,
                     end_time=0.5,
                 )
 
-        control_inputs, motor_target = super().step(obs, is_real)
+        control_inputs, motor_target = super().step(obs, sim)
 
         if self.reset_time is not None:
             if obs.time < self.reset_time[-1]:

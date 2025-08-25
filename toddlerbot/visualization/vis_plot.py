@@ -1,3 +1,5 @@
+"""Plotting functions for robot data visualization."""
+
 import argparse
 from typing import Any, Callable, Dict, List, Tuple
 
@@ -8,6 +10,7 @@ from matplotlib.patches import Polygon
 
 from toddlerbot.visualization.vis_utils import (
     load_and_run_visualization,
+    log_plot_config,
     make_vis_function,
 )
 
@@ -195,11 +198,14 @@ def plot_ankle_mapping(
             )()
 
 
+@log_plot_config
 def plot_motor_vel_tor_mapping(
     motor_vel_list: List[float],
     motor_tor_list: List[float],
     save_path: str,
     file_name: str = "motor_vel_tor_mapping",
+    save_config: bool = True,
+    blocking: bool = True,
 ):
     plot_scatter_graph(
         np.abs(motor_vel_list, dtype=np.float32),
@@ -211,6 +217,7 @@ def plot_motor_vel_tor_mapping(
         save_config=True,
         save_path=save_path,
         file_name=file_name,
+        blocking=blocking,
     )()
 
 
@@ -265,10 +272,11 @@ def plot_footsteps(
     title: str = "",
     x_label: str = "",
     y_label: str = "",
-    save_config: bool = False,
+    save_config: bool = True,
     save_path: str = "",
     file_name: str = "",
     file_suffix: str = "",
+    blocking: bool = True,
     ax: Any = None,
 ) -> Callable[[], None]:
     if ax is None:
@@ -313,7 +321,6 @@ def plot_footsteps(
         title=title,
         x_label=x_label,
         y_label=y_label,
-        save_config=save_config,
         save_path=save_path,
         file_name=file_name,
         file_suffix=file_suffix,
@@ -321,21 +328,54 @@ def plot_footsteps(
     return vis_function
 
 
+@log_plot_config
 def plot_loop_time(
-    loop_time_dict: Dict[str, List[float]], save_path: str, file_name: str = "loop_time"
+    loop_time_list: List[float],
+    save_path: str,
+    file_name: str = "loop_time",
+    save_config: bool = True,
+    blocking: bool = True,
 ):
+    loop_time_dict: Dict[str, List[float]] = {
+        "obs_time": [],
+        "inference_time": [],
+        "set_action_time": [],
+        "sim_step_time": [],
+        "log_time": [],
+        # "sleep_time": [],
+    }
+    for i, loop_time in enumerate(loop_time_list):
+        (
+            step_start,
+            obs_time,
+            inference_time,
+            set_action_time,
+            sim_step_time,
+            step_end,
+            sleep_time,
+        ) = loop_time
+        loop_time_dict["obs_time"].append((obs_time - step_start) * 1000)
+        loop_time_dict["inference_time"].append((inference_time - obs_time) * 1000)
+        loop_time_dict["set_action_time"].append(
+            (set_action_time - inference_time) * 1000
+        )
+        loop_time_dict["sim_step_time"].append((sim_step_time - set_action_time) * 1000)
+        loop_time_dict["log_time"].append((step_end - sim_step_time) * 1000)
+        # loop_time_dict["sleep_time"].append(sleep_time * 1000)
+
     plot_line_graph(
         list(loop_time_dict.values()),
         legend_labels=list(loop_time_dict.keys()),
         title="Loop Time",
         x_label="Iterations",
         y_label="Time (ms)",
-        save_config=True,
         save_path=save_path,
         file_name=file_name,
+        blocking=blocking,
     )()
 
 
+@log_plot_config
 def plot_path_tracking(
     time_obs_list: List[float],
     pos_obs_list: List[npt.NDArray[np.float32]],
@@ -343,6 +383,8 @@ def plot_path_tracking(
     control_inputs_dict: Dict[str, List[float]],
     save_path: str,
     file_name: str = "path_tracking",
+    save_config: bool = True,
+    blocking: bool = True,
 ):
     """
     Plots the observed path (pos_obs_list) and the integrated path of walk commands.
@@ -416,16 +458,18 @@ def plot_path_tracking(
         save_config=True,
         save_path=save_path,
         file_name=file_name,
+        blocking=blocking,
     )()
 
 
+@log_plot_config
 def plot_joint_tracking(
     time_seq_dict: Dict[str, List[float]],
     time_seq_ref_dict: Dict[str, List[float]],
     joint_data_dict: Dict[str, List[float]],
     joint_data_ref_dict: Dict[str, List[float]],
-    joint_limits: Dict[str, List[float]],
     save_path: str,
+    joint_limits: Dict[str, List[float]] | None = None,
     x_label: str = "Time (s)",
     y_label: str = "Position (rad)",
     file_name: str = "motor_pos_tracking",
@@ -433,6 +477,8 @@ def plot_joint_tracking(
     title_list: List[str] = [],
     set_ylim: bool = False,
     line_suffix: List[str] = ["_obs", "_act"],
+    save_config: bool = True,
+    blocking: bool = True,
 ):
     x_list: List[List[float]] = []
     y_list: List[List[float]] = []
@@ -469,15 +515,82 @@ def plot_joint_tracking(
             title=f"{joint_name_list[i]}" if len(title_list) == 0 else title_list[i],
             x_label=x_label,
             y_label=y_label,
-            save_config=True if i == n_plots - 1 else False,
             save_path=save_path if i == n_plots - 1 else None,
             file_name=file_name if i == n_plots - 1 else "",
             file_suffix=file_suffix,
+            blocking=blocking,
             ax=ax,
             legend_labels=legend_labels[2 * i : 2 * i + 2],
         )()
 
 
+@log_plot_config
+def plot_joint_drive_direction(
+    time_seq_dict: Dict[str, List[float]],
+    joint_data_dict: Dict[str, List[float]],
+    binary_data_dict: Dict[str, List[float]],
+    save_path: str,
+    x_label: str = "Time (s)",
+    y_label: str = "Position (rad)",
+    file_name: str = "pos_vs_drive",
+    file_suffix: str = "",
+    title_list: List[str] = [],
+    set_ylim: bool = False,
+    save_config: bool = True,
+    blocking: bool = True,
+):
+    x_list: List[List[float]] = []
+    y_list: List[List[float]] = []
+    binary_data: List[List[float]] = []
+    legend_labels: List[str] = []
+    for name in time_seq_dict.keys():
+        x_list.append(time_seq_dict[name])
+        y_list.append(joint_data_dict[name])
+        binary_data.append(binary_data_dict[name])
+        legend_labels.append(name)
+
+    n_plots = len(time_seq_dict)
+    n_rows = int(np.ceil(n_plots / 3))
+    n_cols = 3
+
+    fig, axs = plt.subplots(n_rows, n_cols, figsize=(n_cols * 5, n_rows * 3))
+    plt.subplots_adjust(hspace=0.4, wspace=0.4)
+
+    for i, ax in enumerate(axs.flat):
+        if i >= n_plots:
+            ax.set_visible(False)
+            continue
+
+        if set_ylim:
+            ax.set_ylim(-5, 5)
+
+        plot_line_graph(
+            y_list[i],
+            x_list[i],
+            title=f"{legend_labels[i]}" if len(title_list) == 0 else title_list[i],
+            x_label=x_label,
+            y_label=y_label,
+            save_path=save_path if i == n_plots - 1 else None,
+            file_name=file_name if i == n_plots - 1 else "",
+            file_suffix=file_suffix,
+            ax=ax,
+            legend_labels=[legend_labels[i]],
+            blocking=blocking,
+        )()
+
+        y_min, y_max = ax.get_ylim()
+        ax.fill_between(
+            x_list[i],
+            y_min,
+            y_max,
+            where=(np.array(binary_data[i]) > 0),
+            alpha=0.2,
+            label="forward drive",
+            linewidth=0,
+        )
+
+
+@log_plot_config
 def plot_joint_tracking_frequency(
     time_seq_dict: Dict[str, List[float]],
     time_seq_ref_dict: Dict[str, List[float]],
@@ -491,6 +604,8 @@ def plot_joint_tracking_frequency(
     title_list: List[str] = [],
     set_ylim: bool = False,
     line_suffix: List[str] = ["_obs", "_ref"],
+    save_config: bool = True,
+    blocking: bool = True,
 ):
     x_list: List[List[float]] = []
     y_list: List[List[float]] = []
@@ -550,15 +665,16 @@ def plot_joint_tracking_frequency(
             title=f"{joint_name_list[i]}" if len(title_list) == 0 else title_list[i],
             x_label=x_label,
             y_label=y_label,
-            save_config=True if i == n_plots - 1 else False,
             save_path=save_path if i == n_plots - 1 else None,
             file_name=file_name if i == n_plots - 1 else "",
             file_suffix=file_suffix,
             ax=ax,
             legend_labels=legend_labels[2 * i : 2 * i + 2],
+            blocking=blocking,
         )()
 
 
+@log_plot_config
 def plot_joint_tracking_single(
     time_seq_dict: Dict[str, List[float]],
     joint_data_dict: Dict[str, List[float]],
@@ -569,6 +685,8 @@ def plot_joint_tracking_single(
     file_suffix: str = "",
     title_list: List[str] = [],
     set_ylim: bool = False,
+    save_config: bool = True,
+    blocking: bool = True,
 ):
     x_list: List[List[float]] = []
     y_list: List[List[float]] = []
@@ -599,15 +717,16 @@ def plot_joint_tracking_single(
             title=f"{legend_labels[i]}" if len(title_list) == 0 else title_list[i],
             x_label=x_label,
             y_label=y_label,
-            save_config=True if i == n_plots - 1 else False,
             save_path=save_path if i == n_plots - 1 else None,
             file_name=file_name if i == n_plots - 1 else "",
             file_suffix=file_suffix,
             ax=ax,
             legend_labels=[legend_labels[i]],
+            blocking=blocking,
         )()
 
 
+@log_plot_config
 def plot_sim2real_gap_line(
     time_sim_list: List[float],
     time_real_list: List[float],
@@ -620,6 +739,8 @@ def plot_sim2real_gap_line(
     axis_names: List[str] = ["roll", "pitch", "yaw"],
     file_name: str = "euler_gap",
     file_suffix: str = "",
+    save_config: bool = True,
+    blocking: bool = True,
 ):
     for data_sim, angle_real, axis_name in zip(data_sim.T, data_real.T, axis_names):
         plot_line_graph(
@@ -635,13 +756,14 @@ def plot_sim2real_gap_line(
             title=title,
             x_label=x_label,
             y_label=y_label,
-            save_config=True,
             save_path=save_path,
             file_name=f"{file_name}_{axis_name}",
             file_suffix=file_suffix,
+            blocking=blocking,
         )()
 
 
+@log_plot_config
 def plot_sim2real_gap_bar(
     rmse_dict: Dict[str, float],
     rmse_label: str,
@@ -651,6 +773,8 @@ def plot_sim2real_gap_bar(
     y_label: str = "Root Mean Squared Error",
     file_name: str = "sim2real_gap",
     file_suffix: str = "",
+    save_config: bool = True,
+    blocking: bool = True,
 ):
     joint_labels = list(rmse_dict.keys())
 
@@ -665,14 +789,15 @@ def plot_sim2real_gap_bar(
         y_label=y_label,
         bar_colors=["b"],
         bar_width=0.25,
-        save_config=True,
         save_path=save_path,
         file_name=file_name,
         file_suffix=file_suffix,
         joint_labels=joint_labels,  # Pass the joint labels
+        blocking=blocking,
     )()
 
 
+@log_plot_config
 def plot_bar_graph(
     y: Any,
     x: Any = None,
@@ -686,6 +811,7 @@ def plot_bar_graph(
     save_path: str = "",
     file_name: str = "",
     file_suffix: str = "",
+    blocking: bool = True,
     ax: Any = None,
     bar_width: float = 0.25,
     joint_labels: List[str] = [],  # New parameter for joint labels
@@ -763,7 +889,6 @@ def plot_bar_graph(
         title=title,
         x_label=x_label,
         y_label=y_label,
-        save_config=save_config,
         save_path=save_path,
         file_name=file_name,
         file_suffix=file_suffix,
@@ -772,6 +897,7 @@ def plot_bar_graph(
     return vis_function
 
 
+@log_plot_config
 def plot_line_graph(
     y: Any,
     x: Any = None,
@@ -786,6 +912,7 @@ def plot_line_graph(
     save_path: str = "",
     file_name: str = "",
     file_suffix: str = "",
+    blocking: bool = True,
     ax: Any = None,
     checkpoint_period: List[int] = [],
 ):
@@ -863,7 +990,6 @@ def plot_line_graph(
         title=title,
         x_label=x_label,
         y_label=y_label,
-        save_config=save_config,
         save_path=save_path,
         file_name=file_name,
         file_suffix=file_suffix,
@@ -872,6 +998,7 @@ def plot_line_graph(
     return vis_function
 
 
+@log_plot_config
 def plot_scatter_graph(
     y: npt.NDArray[np.float32],
     x: npt.NDArray[np.float32],
@@ -885,6 +1012,7 @@ def plot_scatter_graph(
     save_path: str = "",
     file_name: str = "",
     file_suffix: str = "",
+    blocking: bool = True,
     ax: Any = None,
 ):
     if ax is None:
@@ -912,13 +1040,107 @@ def plot_scatter_graph(
         title=title,
         x_label=x_label,
         y_label=y_label,
-        save_config=save_config,
         save_path=save_path,
         file_name=file_name,
         file_suffix=file_suffix,
     )
 
     return vis_function
+
+
+@log_plot_config
+def plot_ang_vel_frequency(
+    time_seq_sim: List[float],
+    time_seq_real: List[float],
+    ang_vel_sim: npt.NDArray[np.float32],
+    ang_vel_real: npt.NDArray[np.float32],
+    save_path: str,
+    x_label: str = "Frequency (Hz)",
+    y_label: str = "Magnitude",
+    file_name: str = "ang_vel_freq_comparison",
+    file_suffix: str = "",
+    title_list: List[str] = [],
+    set_ylim: bool = False,
+    line_suffix: List[str] = ["_sim", "_real"],
+    save_config: bool = True,
+    blocking: bool = True,
+):
+    """Plot frequency domain comparison of angular velocity between simulation and real data.
+
+    Args:
+        time_seq_sim: Time sequence for simulation data
+        time_seq_real: Time sequence for real data
+        ang_vel_sim: Angular velocity simulation data with shape (n_samples, 3) for [x, y, z]
+        ang_vel_real: Angular velocity real data with shape (n_samples, 3) for [x, y, z]
+        save_path: Path to save the plot
+        x_label: X-axis label
+        y_label: Y-axis label
+        file_name: Name of the output file
+        file_suffix: Suffix for the output file
+        title_list: List of titles for each subplot
+        set_ylim: Whether to set y-axis limits
+        line_suffix: Suffixes for legend labels
+        save_config: Whether to save configuration
+        blocking: Whether to show plot in blocking mode
+    """
+    x_list: List[List[float]] = []
+    y_list: List[List[float]] = []
+    axis_names = ["X (Roll)", "Y (Pitch)", "Z (Yaw)"]
+    legend_labels: List[str] = []
+
+    # For each axis, compute the FFT of simulation and real angular velocity data
+    for axis in range(3):
+        # Calculate time steps (assuming uniform sampling)
+        time_step_sim = np.mean(np.diff(time_seq_sim))
+        time_step_real = np.mean(np.diff(time_seq_real))
+
+        # Compute FFT for simulation data
+        sim_fft = np.fft.fft(ang_vel_sim[:, axis])
+        freqs_sim = np.fft.fftfreq(len(ang_vel_sim), time_step_sim)
+
+        # Compute FFT for real data
+        real_fft = np.fft.fft(ang_vel_real[:, axis])
+        freqs_real = np.fft.fftfreq(len(ang_vel_real), time_step_real)
+
+        # Use only positive frequencies
+        pos_freqs_sim = freqs_sim[: len(freqs_sim) // 2]
+        pos_freqs_real = freqs_real[: len(freqs_real) // 2]
+        pos_magnitudes_sim = np.abs(sim_fft[: len(sim_fft) // 2])
+        pos_magnitudes_real = np.abs(real_fft[: len(real_fft) // 2])
+
+        x_list.append(list(pos_freqs_sim))
+        x_list.append(list(pos_freqs_real))
+        y_list.append(list(pos_magnitudes_sim))
+        y_list.append(list(pos_magnitudes_real))
+        legend_labels.append(axis_names[axis] + line_suffix[0])  # Simulation label
+        legend_labels.append(axis_names[axis] + line_suffix[1])  # Real label
+
+    n_plots = 3  # 3 axes
+    n_rows = 1
+    n_cols = 3
+    fig, axs = plt.subplots(n_rows, n_cols, figsize=(n_cols * 5, n_rows * 3))
+    plt.subplots_adjust(hspace=0.4, wspace=0.4)
+
+    for i, ax in enumerate(axs.flat):
+        if i >= n_plots:
+            ax.set_visible(False)
+            continue
+        if set_ylim:
+            ax.set_ylim(-0.1, 100)
+        ax.set_yscale("log")
+        plot_line_graph(
+            y_list[2 * i : 2 * i + 2],
+            x_list[2 * i : 2 * i + 2],
+            title=f"{axis_names[i]}" if len(title_list) == 0 else title_list[i],
+            x_label=x_label,
+            y_label=y_label,
+            save_path=save_path if i == n_plots - 1 else None,
+            file_name=file_name if i == n_plots - 1 else "",
+            file_suffix=file_suffix,
+            ax=ax,
+            legend_labels=legend_labels[2 * i : 2 * i + 2],
+            blocking=blocking,
+        )()
 
 
 if __name__ == "__main__":
