@@ -8,7 +8,7 @@ Getting Started (Hardware)
    :hidden:
 
    ../hardware/01_bill_of_materials
-   ../hardware/02_pcb
+   ../hardware/02_pcb8ch
    ../hardware/03_3d_printing
    ../hardware/04_assembly_manual
 
