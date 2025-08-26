@@ -7,8 +7,8 @@
 **[Video](https://youtu.be/A43QxHSgLyM)** | 
 **[Tweet](https://x.com/HaochenShi74/status/1886599720279400732)** |
 **[Documentation](https://hshi74.github.io/toddlerbot)** |
-**[Onshape](https://cad.onshape.com/documents/ff1e767f256dd9c8abf2206a)** |
-**[MakerWorld](https://makerworld.com/en/models/1068768)**
+**[Onshape](https://cad.onshape.com/documents/565bc33af293a651f66e88d2)** |
+**[MakerWorld](https://makerworld.com/en/models/1733983)**
 
 ToddlerBot is a low-cost, open-source humanoid robot platform designed for scalable policy learning and research in robotics and AI.
 

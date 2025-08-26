@@ -9,7 +9,7 @@ Hardware Setup
 ---------------------------------------------
 You will need to purchase the sysID section in the :ref:`bill_of_materials`.
 
-For 3D-printed parts, you can find all the sliced plates in the `MakerWorld <https://makerworld.com/en/models/1068768>`_ 
+For 3D-printed parts, you can find all the sliced plates in the `MakerWorld <https://makerworld.com/en/models/1733983>`_ 
 and the CAD files in the `Onshape document <https://cad.onshape.com/documents/1fb5d9a88ac086a053c4340b>`_.
 
 We use 21700 cells as loads to adjust the motor load weight.

@@ -4,7 +4,7 @@ Notable changes to ToddlerBot are documented here.
 
 ## [2.0.0] - 2025-08-25
 
-[Link to our X Post](TODO)
+[Link to our X Post](https://x.com/HaochenShi74/status/1960130228480872683)
 
 ### **New Capabilities**
 
@@ -92,7 +92,7 @@ We add many features to the keyframe app to make motion editing easy.
 
 #### Miscellaneous
   - Pre-applied thread locker fasteners
-  - Detailed 3D printing profiles in our [MakerWorld release](TODO)
+  - Detailed 3D printing profiles in our [MakerWorld release](https://makerworld.com/en/models/1733983)
 
 ### **Actuation**
 #### Enhanced Motor System ID
@@ -209,8 +209,8 @@ Thanks to our team members (alphabetical orders) for making this possible!
 
 ## Migration Guide from 1.0 to 2.0
 
-1. Order parts per [BOM](https://hshi74.github.io/toddlerbot/hardware/01_bill_of_materials.html) and new communication board based on the instructions [here](https://hshi74.github.io/toddlerbot/hardware/02_pcb.html)
-2. Re-print all parts except torso and head based on our [MakerWorld release](TODO)
+1. Order parts per [BOM](https://hshi74.github.io/toddlerbot/hardware/01_bill_of_materials.html) and new communication board based on the instructions [here](https://hshi74.github.io/toddlerbot/hardware/02_pcb8ch.html)
+2. Re-print all parts except torso and head based on our [MakerWorld release](https://makerworld.com/en/models/1733983)
 3. Follow updated [assembly instructions](https://hshi74.github.io/toddlerbot/hardware/04_assembly_manual.html)
 4. Reinstall conda environment based on instructions [here](https://hshi74.github.io/toddlerbot/software/01_setup.html)
 5. Ready to use! Please don't hesitate to let us know if there are any problems! The most recommended way is to post a GitHub issue

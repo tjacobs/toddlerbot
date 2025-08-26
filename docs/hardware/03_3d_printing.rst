@@ -5,7 +5,7 @@
 
 BambuLab printers are highly recommended. They're affordable and will save you time and hassle with part tolerances. 
 
-Check out our `MakerWorld <https://makerworld.com/en/models/1068768>`_ release. For BambuLab users, hit print, and let's go! 
+Check out our `MakerWorld <https://makerworld.com/en/models/1733983>`_ release. For BambuLab users, hit print, and let's go! 
 For other printers, you can download the 3MF files from the link above to inspect the printing orientation and profile of each part. 
 Proper orientation and profiles are crucial to ensure the strength and durability of the 3D-printed parts.
 

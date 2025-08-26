@@ -7,7 +7,7 @@ Build the Arms and Prepare the Parts
 ------------------------------------------
 To build a teleoperation leader, follow the same steps used for assembling the two arms.
 Additionally, print an extra torso along with the teleoperation-specific components
-as shown in the `MakerWorld <https://makerworld.com/en/models/1068768>`_.
+as shown in the `MakerWorld <https://makerworld.com/en/models/1733983>`_.
 
 Assemble the Torso
 ----------------------------
