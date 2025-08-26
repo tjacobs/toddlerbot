@@ -7,25 +7,40 @@ Notable changes to ToddlerBot are documented here.
 [Link to our X Post](TODO)
 
 ### **New Capabilities**
+
+The GIFs are large and might take some time to load.
+
 #### Cartwheel: Dynamic acrobatic movements 
-![Cartwheel](docs/_static/cartwheel.gif)
+<!-- ![Cartwheel](docs/_static/cartwheel.gif) -->
+<img src="docs/_static/cartwheel.gif" width="640"/>
 
 #### Crawl: Crawl like a toddler
-![Crawl](docs/_static/crawl.gif)
+<!-- ![Crawl](docs/_static/crawl.gif) -->
+<img src="docs/_static/crawl.gif" width="640"/>
 
 #### Enhanced Walking: Improved speed and stability
-![Walk faster](docs/_static/walk_faster.gif)
+<!-- ![Walk faster](docs/_static/walk_faster.gif) -->
+<img src="docs/_static/walk_faster.gif" width="640"/>
 
 #### VR Teleoperation: Real-time teleop via Meta Quest 
-![VR Teleop](docs/_static/vr_teleop.gif)
+<!-- ![VR Teleop](docs/_static/vr_teleop.gif) -->
+<img src="docs/_static/vr_teleop.gif" width="640"/>
 
 #### Depth Perception: Foundation stereo 
-![Depth](docs/_static/depth.gif)
+<!-- ![Depth](docs/_static/depth.gif) -->
+<img src="docs/_static/depth.gif" width="640"/>
 
 #### Hardware Robustness
 We'll be honest: with naive DeepMimic and domain randomization, the success rate is still low. But the good news is that Toddy is extremely robust—it almost never breaks. Even if it breaks, it is super easy to fix.
 
-![Cartwheel failures](docs/_static/cartwheel_failures.gif)
+<!-- ![Cartwheel failures](docs/_static/cartwheel_failures.gif) -->
+<img src="docs/_static/cartwheel_failures.gif" width="640"/>
+
+#### Keyframe App
+
+We add many features to the keyframe app to make motion editing easy.
+<!-- ![Keyframe](docs/_static/keyframe.gif) -->
+<img src="docs/_static/keyframe.gif" width="640"/>
 
 ### **Hardware Design**
 
@@ -183,6 +198,12 @@ We'll be honest: with naive DeepMimic and domain randomization, the success rate
 #### Evaluation Tools
   - Enhanced sim2real analysis tools
   - Automated wandb checkpoint/log management
+
+
+### **Acknowledgement**
+Thanks to our team members (alphabetical orders) for making this possible! 
+
+[Yao He](https://shockwavehe.github.io/), [Kaizhe Hu](https://hukz18.github.io/), [Jiacheng Hu](https://www.linkedin.com/in/jc-hu/), [Songbo Hu](https://hsb0508.github.io/), [Daniel Jiang](https://www.linkedin.com/in/danieljiangdj/), [Ken Wang](http://me.weizhuowang.com/), [Tae Hoon Yang](https://tae-h-yang.github.io/), [Zhicong Zhang](https://www.linkedin.com/in/zhicongzhang/)
 
 ---
 
