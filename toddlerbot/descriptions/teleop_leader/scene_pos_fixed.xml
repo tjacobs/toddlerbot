@@ -1,4 +1,4 @@
-<?xml version="1.0" ?>
+<?xml version="1.0"?>
 <mujoco model="teleop_leader_pos_fixed_scene">
   <include file="teleop_leader_pos_fixed.xml"/>
   <statistic center="0 0 -0.05" extent="0.6"/>

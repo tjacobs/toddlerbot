@@ -1,4 +1,4 @@
-<?xml version="1.0" ?>
+<?xml version="1.0"?>
 <mujoco model="toddlerbot_2xc_fixed_scene">
   <include file="toddlerbot_2xc_fixed.xml"/>
   <statistic center="0 0 -0.05" extent="0.6"/>

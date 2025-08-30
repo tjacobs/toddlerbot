@@ -30,9 +30,9 @@ def string_to_list(string: str) -> list:
     return [float(item.strip()) for item in string.split(" ") if item.strip()]
 
 
-def list_to_string(lst: list, digits: int = 6) -> str:
+def list_to_string(lst: list, digits: int = 8) -> str:
     """Convert a list of strings to a comma-separated string."""
-    return " ".join(str(round_to_sig_digits(item, digits)) for item in lst)
+    return " ".join(str(round(item, digits)) for item in lst)
 
 
 def compute_bounding_box(mesh: trimesh.Trimesh):
