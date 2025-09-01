@@ -53,7 +53,6 @@ from toddlerbot.sim.robot import Robot
 from toddlerbot.utils.misc_utils import (
     dataclass2dict,
     dump_profiling_data,
-    parse_value,
     # profile,
 )
 
@@ -1200,9 +1199,8 @@ def main(args=None):
 
     # Bind parameters from --gin_config
     if len(args.gin_config) > 0:
-        for override in args.gin_config.split(","):
-            key, value = override.split("=", 1)  # Split into key-value pair
-            gin.bind_parameter(key, parse_value(value))
+        overrides = [s.strip() for s in args.gin_config.split(";") if s.strip()]
+        gin.parse_config(overrides)
 
     robot = Robot(args.robot)
 

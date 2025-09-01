@@ -1,4 +1,4 @@
-<?xml version="1.0" ?>
+<?xml version="1.0"?>
 <mujoco model="sysID_XM430_vis_scene">
   <include file="sysID_XM430_vis.xml"/>
   <statistic center="0 0 -0.05" extent="0.6"/>
