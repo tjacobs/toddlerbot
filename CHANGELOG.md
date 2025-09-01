@@ -185,10 +185,11 @@ We add many features to the keyframe app to make motion editing easy.
   - Organized wandb logging
 
 ### **VR Teleoperation**
-- Meta Quest device support (tested on Quest 2)
-- Real-time IK motion retargeting
-- Hand and neck tracking with fixed base
-- Python communication interface
+  - Meta Quest device support (tested on Quest 2)
+  - Real-time IK motion retargeting
+  - Hand and neck tracking with fixed base
+  - Python communication interface
+  - See [toddlerbot/manipulation/teleoperation/toddy_ar/README.md](toddlerbot/manipulation/teleoperation/toddy_ar/README.md)
 
 ### **Real world & Deployment**
 #### Observation System
@@ -214,11 +215,3 @@ Thanks to our team members (alphabetical orders) for making this possible!
 3. Follow updated [assembly instructions](https://hshi74.github.io/toddlerbot/hardware/04_assembly_manual.html)
 4. Reinstall conda environment based on instructions [here](https://hshi74.github.io/toddlerbot/software/01_setup.html)
 5. Ready to use! Please don't hesitate to let us know if there are any problems! The most recommended way is to post a GitHub issue
-
-
-
-## TODO by 09/01:
-
-1. Clean up the code for VR teleoperation
-2. Finish the assembly manual
-3. Add the tutorial for DIY battery

@@ -350,7 +350,7 @@ class TalkToddyPolicy(BasePolicy):
                 return self.pushup_policy.step(obs, is_real)
 
         send_msg = ZMQMessage(
-            time=time.monotonic(),
+            time=time.time(),
             control_inputs={"listen": int(self.audio_player.is_playing())},
         )
         self.zmq_sender.send_msg(send_msg)

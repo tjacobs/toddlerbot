@@ -26,7 +26,7 @@ def main(ip: str):
     joystick = Joystick()
 
     p_bar = tqdm(desc="Running the teleoperation")
-    start_time = time.monotonic()
+    start_time = time.time()
     step_idx = 0
     time_until_next_step = 0.0
     control_dt = 0.02
@@ -52,7 +52,7 @@ def main(ip: str):
                         is_button_pressed = False  # Reset button pressed state
 
             # compile data to send to follower
-            msg = ZMQMessage(time=time.monotonic(), control_inputs=control_inputs)
+            msg = ZMQMessage(time=time.time(), control_inputs=control_inputs)
             # print(f"Sending: {msg}")
             zmq.send_msg(msg)
 
@@ -62,7 +62,7 @@ def main(ip: str):
             if step_idx % p_bar_steps == 0:
                 p_bar.update(p_bar_steps)
 
-            step_end = time.monotonic()
+            step_end = time.time()
 
             time_until_next_step = start_time + control_dt * step_idx - step_end
             # print(f"time_until_next_step: {time_until_next_step * 1000:.2f} ms")
