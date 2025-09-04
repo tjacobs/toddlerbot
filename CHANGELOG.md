@@ -189,7 +189,7 @@ We add many features to the keyframe app to make motion editing easy.
   - Real-time IK motion retargeting
   - Hand and neck tracking with fixed base
   - Python communication interface
-  - See [toddlerbot/manipulation/teleoperation/toddy_ar/README.md](toddlerbot/manipulation/teleoperation/toddy_ar/README.md)
+  - See [toddlerbot/manipulation/teleoperation/toddy_vr/README.md](toddlerbot/manipulation/teleoperation/toddy_vr/README.md)
 
 ### **Real world & Deployment**
 #### Observation System
