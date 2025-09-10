@@ -187,7 +187,7 @@ class TeleopLeaderPolicy(BasePolicy):
 
         # compile data to send to follower
         msg = ZMQMessage(
-            time=time.monotonic(),
+            time=time.time(),
             control_inputs=control_inputs,
             action=action,
             fsr=np.array([fsrL, fsrR]),
@@ -195,8 +195,8 @@ class TeleopLeaderPolicy(BasePolicy):
         # print(f"Sending: {msg}")
         self.zmq.send_msg(msg)
 
-        # time_curr = time.monotonic()
+        # time_curr = time.time()
         # print(f"Loop time: {1000 * (time_curr - self.last_time):.2f} ms")
-        # self.last_time = time.monotonic()
+        # self.last_time = time.time()
 
         return control_inputs, action

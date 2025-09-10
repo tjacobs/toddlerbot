@@ -49,7 +49,7 @@ def main():
 
         print(frame.shape)
 
-        latency = time.monotonic() - msg_time
+        latency = time.time() - msg_time
         print(f"Latency: {latency * 1000:.2f} ms")
 
         cv2.imshow("Received Image", frame)

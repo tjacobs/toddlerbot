@@ -173,13 +173,13 @@ class DPPolicy(BalancePDPolicy):
         """
         if len(self.obs_deque) == self.model.obs_horizon:
             if len(self.model_action_seq) == 0:
-                t1 = time.monotonic()
+                t1 = time.time()
                 self.model_action_seq = list(
                     self.model.get_action_from_obs(self.obs_deque)[
                         self.action_dropout :
                     ]
                 )
-                t2 = time.monotonic()
+                t2 = time.time()
                 print(f"Model inference time: {t2 - t1:.3f}s")
 
             arm_motor_pos = self.model_action_seq.pop(0)

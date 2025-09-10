@@ -82,14 +82,19 @@ class TeleopFollowerPDPolicy(BalancePDPolicy):
         # self.neck_pitch_ratio = 0.0
         self.num_arm_motors = 7
 
-        if len(task) > 0:
-            motion_file_path = os.path.join("motion", f"{prep}.pkl")
+        if '2xc' in robot.name:
+            self.surfix = '_2xc'
+        elif '2xm' in robot.name:
+            self.surfix = '_2xm'
+        else:
+            self.surfix = ''
+        if len(task) > 0 and task != "teleop_vr":
+            motion_file_path = os.path.join("motion", f"{prep}{self.surfix}.lz4")
             if os.path.exists(motion_file_path):
                 data_dict = joblib.load(motion_file_path)
             else:
                 raise ValueError(f"No data files found in {motion_file_path}")
-
-            self.manip_motor_pos = np.array(data_dict["action_traj"], dtype=np.float32)[
+            self.manip_motor_pos = np.array(data_dict["action"], dtype=np.float32)[
                 -1
             ]
             self.manip_motor_pos[self.neck_pitch_idx] *= self.neck_pitch_ratio
@@ -123,7 +128,24 @@ class TeleopFollowerPDPolicy(BalancePDPolicy):
             return self.manip_motor_pos[self.arm_motor_indices]
         else:
             return self.arm_motor_pos
+        
+    def get_neck_motor_pos(self, obs: Obs) -> npt.NDArray[np.float32]:
+        """Retrieves the current positions of the neck motors.
 
+        If the neck motor positions have been explicitly set, returns those values.
+        Otherwise, extracts and returns the positions from the manipulation motor
+        positions using predefined arm motor indices.
+
+        Args:
+            obs (Obs): The observation object containing relevant data.
+
+        Returns:
+            npt.NDArray[np.float32]: An array of arm motor positions.
+        """
+        if self.neck_motor_pos is None:
+            return self.manip_motor_pos[self.neck_motor_indices]
+        else:
+            return self.neck_motor_pos
     def step(
         self, obs: Obs, sim: BaseSim
     ) -> Tuple[Dict[str, float], npt.NDArray[np.float32]]:

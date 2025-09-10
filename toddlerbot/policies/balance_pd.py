@@ -128,6 +128,10 @@ class BalancePDPolicy(BasePolicy):
         self.gripper_delta_max = 0.5
         self.last_joint_target = self.default_joint_pos.copy()
 
+        self.neck_motor_pos = None
+        self.last_neck_motor_pos = None
+        self.neck_delta_max = 0.1
+
         # These are for the center of mass (CoM) PD control
         self.hip_to_knee_z = robot.config["robot"]["hip_to_knee_z"]
         self.knee_to_ank_z = robot.config["robot"]["knee_to_ankle_z"]
@@ -194,7 +198,7 @@ class BalancePDPolicy(BasePolicy):
         self.manip_motor_pos = self.default_motor_pos.copy()
 
     def get_command(
-        self, obs: Obs, control_inputs: Dict[str, float]
+        self, control_inputs: Dict[str, float]
     ) -> npt.NDArray[np.float32]:
         """Generates a command array based on control inputs for various tasks.
 
@@ -260,6 +264,17 @@ class BalancePDPolicy(BasePolicy):
             npt.NDArray[np.float32]: An array of the arm motor positions.
         """
         return self.manip_motor_pos[self.arm_motor_indices]
+
+    def get_neck_motor_pos(self, obs: Obs) -> npt.NDArray[np.float32]:
+        """Retrieve the positions of the arm motors from the observation data.
+
+        Args:
+            obs (Obs): The observation data containing motor positions.
+
+        Returns:
+            npt.NDArray[np.float32]: An array of the arm motor positions.
+        """
+        return self.manip_motor_pos[self.neck_motor_indices]
 
     def com_fk(self, knee_angle, hip_pitch_angle=None, hip_roll_angle=None):
         """Calculates the center of mass (CoM) position of a leg segment based on joint angles.
@@ -354,16 +369,22 @@ class BalancePDPolicy(BasePolicy):
         return leg_joint_pos
 
     def get_motor_target(
-        self, arm_joint_pos: npt.NDArray[np.float32], command: npt.NDArray[np.float32]
+        self, arm_joint_pos: npt.NDArray[np.float32], command: npt.NDArray[np.float32], neck_joint_pos: npt.NDArray[np.float32]=None
     ):
         joint_target = self.default_joint_pos.copy()
-
-        neck_joint_pos = np.clip(
-            self.last_joint_target[self.neck_joint_indices]
-            + self.control_dt * command[:2],
-            self.robot.neck_joint_limits[0],
-            self.robot.neck_joint_limits[1],
-        )
+        if neck_joint_pos is None:
+                neck_joint_pos = np.clip(
+                    self.last_joint_target[self.neck_joint_indices]
+                + self.control_dt * command[:2],
+                self.robot.neck_joint_limits[0],
+                self.robot.neck_joint_limits[1],
+            )
+        else:
+            neck_joint_pos = np.clip(
+                neck_joint_pos,
+                self.robot.neck_joint_limits[0],
+                self.robot.neck_joint_limits[1],
+            )
         joint_target[self.neck_joint_indices] = neck_joint_pos
 
         waist_joint_pos = np.clip(
@@ -464,72 +485,46 @@ class BalancePDPolicy(BasePolicy):
             )
             return {}, action
 
-        if not self.is_ready:
-            self.is_ready = True
-
-            if hasattr(self, "task") and self.task == "hug":
-                manip_motor_pos_1 = self.manip_motor_pos.copy()
-                manip_motor_pos_1[self.left_sho_pitch_idx] = self.default_motor_pos[
-                    self.left_sho_pitch_idx
-                ]
-                manip_motor_pos_1[self.right_sho_pitch_idx] = self.default_motor_pos[
-                    self.right_sho_pitch_idx
-                ]
-                manip_motor_pos_1[self.left_sho_roll_idx] = -1.4
-                manip_motor_pos_1[self.right_sho_roll_idx] = -1.4
-
-                manip_time_1, manip_action_1 = get_action_traj(
-                    0.0,
-                    self.default_motor_pos,
-                    manip_motor_pos_1,
-                    self.manip_duration / 2,
-                    self.control_dt,
-                )
-                manip_time_2, manip_action_2 = get_action_traj(
-                    manip_time_1[-1] + self.control_dt,
-                    manip_motor_pos_1,
-                    self.manip_motor_pos,
-                    self.manip_duration / 2,
-                    self.control_dt,
-                )
-                self.manip_time = np.concatenate([manip_time_1, manip_time_2])
-                self.manip_action = np.concatenate([manip_action_1, manip_action_2])
-            else:
-                self.manip_time, self.manip_action = get_action_traj(
-                    0.0,
-                    self.default_motor_pos,
-                    self.manip_motor_pos,
-                    self.manip_duration,
-                    self.control_dt,
-                )
-
-        if obs.time - self.time_start < self.manip_duration:
-            action = np.asarray(
-                interpolate_action(
-                    obs.time - self.time_start, self.manip_time, self.manip_action
-                )
-            )
-            return {}, action
 
         msg = None
         if self.msg is not None:
             msg = self.msg
         elif self.zmq_receiver is not None:
             msg = self.zmq_receiver.get_msg()
-
         # print(f"msg: {msg}")
 
         if msg is not None:
-            # print(f"latency: {abs(time.monotonic() - msg.time) * 1000:.2f} ms")
-            if abs(time.monotonic() - msg.time) < 1:
-                self.arm_motor_pos = msg.action
-                if self.last_arm_motor_pos is not None:
+            # print(f"latency: {abs(time.time() - msg.time) * 1000:.2f} ms")
+            if abs(time.time()- msg.time) < 1:
+                if msg.action is None:
+                    self.arm_motor_pos = self.last_arm_motor_pos
+                    self.neck_motor_pos = self.last_neck_motor_pos
+                elif hasattr(self, "task") and self.task == "teleop_vr":
+                    self.arm_motor_pos = msg.action[2:]
+                    self.neck_motor_pos = msg.action[:2]
+                else:
+                    self.arm_motor_pos = msg.action
+                # self.arm_motor_pos = msg.action
+                if (
+                    self.last_arm_motor_pos is not None
+                    and self.arm_motor_pos is not None
+                ):
                     self.arm_motor_pos = np.clip(
                         self.arm_motor_pos,
                         self.last_arm_motor_pos - self.arm_delta_max,
                         self.last_arm_motor_pos + self.arm_delta_max,
                     )
                 self.last_arm_motor_pos = self.arm_motor_pos
+
+                if (
+                    self.last_neck_motor_pos is not None
+                    and self.neck_motor_pos is not None
+                ):
+                    self.neck_motor_pos = np.clip(
+                        (self.neck_motor_pos + self.last_neck_motor_pos) / 2,
+                        self.last_neck_motor_pos - self.neck_delta_max,
+                        self.last_neck_motor_pos + self.neck_delta_max,
+                    )
 
                 if (
                     self.robot.has_gripper
@@ -553,19 +548,26 @@ class BalancePDPolicy(BasePolicy):
                         self.motor_limits[self.arm_motor_indices, 0],
                         self.motor_limits[self.arm_motor_indices, 1],
                     )
+
+                if self.neck_motor_pos is not None:
+                    self.neck_motor_pos = np.clip(
+                        self.neck_motor_pos,
+                        self.motor_limits[self.neck_motor_indices, 0],
+                        self.motor_limits[self.neck_motor_indices, 1],
+                    )
             else:
                 print("\nstale message received, discarding")
 
         if self.left_eye is not None and self.capture_rgb:
             jpeg_frame, self.camera_frame = self.left_eye.get_jpeg()
             assert self.camera_frame is not None
-            self.camera_time_list.append(time.monotonic())
+            self.camera_time_list.append(time.time())
             self.camera_frame_list.append(self.camera_frame)
         else:
             jpeg_frame = None
 
         if self.zmq_sender is not None:
-            send_msg = ZMQMessage(time=time.monotonic(), camera_frame=jpeg_frame)
+            send_msg = ZMQMessage(time=time.time(), camera_frame=jpeg_frame)
             self.zmq_sender.send_msg(send_msg)
 
         control_inputs = self.last_control_inputs
@@ -584,7 +586,10 @@ class BalancePDPolicy(BasePolicy):
         arm_motor_pos = self.get_arm_motor_pos(obs)
         arm_joint_pos = self.robot.arm_fk(arm_motor_pos)
 
-        motor_target = self.get_motor_target(arm_joint_pos, command)
+        neck_motor_pos = self.get_neck_motor_pos(obs)
+        neck_joint_pos = self.robot.neck_fk(neck_motor_pos)
+
+        motor_target = self.get_motor_target(arm_joint_pos, command, neck_joint_pos)
 
         if self.use_torso_pd:
             current_roll, current_pitch, _ = obs.rot.as_euler("xyz")
@@ -634,6 +639,68 @@ class BalancePDPolicy(BasePolicy):
         motor_target = np.clip(
             motor_target, self.motor_limits[:, 0], self.motor_limits[:, 1]
         )
+
+        if not self.is_ready:
+            self.is_ready = True
+
+            if hasattr(self, "task"): 
+                if self.task == "hug":
+                    manip_motor_pos_1 = self.manip_motor_pos.copy()
+                    manip_motor_pos_1[self.left_sho_pitch_idx] = self.default_motor_pos[
+                        self.left_sho_pitch_idx
+                    ]
+                    manip_motor_pos_1[self.right_sho_pitch_idx] = self.default_motor_pos[
+                        self.right_sho_pitch_idx
+                    ]
+                    manip_motor_pos_1[self.left_sho_roll_idx] = -1.4
+                    manip_motor_pos_1[self.right_sho_roll_idx] = -1.4
+
+                    manip_time_1, manip_action_1 = get_action_traj(
+                        0.0,
+                        self.default_motor_pos,
+                        manip_motor_pos_1,
+                        self.manip_duration / 2,
+                        self.control_dt,
+                    )
+                    manip_time_2, manip_action_2 = get_action_traj(
+                        manip_time_1[-1] + self.control_dt,
+                        manip_motor_pos_1,
+                        self.manip_motor_pos,
+                        self.manip_duration / 2,
+                        self.control_dt,
+                    )
+                    self.manip_time = np.concatenate([manip_time_1, manip_time_2])
+                    self.manip_action = np.concatenate([manip_action_1, manip_action_2])
+                elif self.task == "teleop_vr":
+                    msg = None
+                    if self.msg is not None:
+                        msg = self.msg
+                    elif self.zmq_receiver is not None:
+                        msg = self.zmq_receiver.get_msg()
+                    self.manip_motor_pos = motor_target.copy()
+                    self.manip_time, self.manip_action = get_action_traj(
+                        0.0,
+                        self.default_motor_pos,
+                        self.manip_motor_pos,
+                        self.manip_duration,
+                        self.control_dt,
+                    )
+            else:
+                self.manip_time, self.manip_action = get_action_traj(
+                    0.0,
+                    self.default_motor_pos,
+                    self.manip_motor_pos,
+                    self.manip_duration,
+                    self.control_dt,
+                )
+
+        if obs.time - self.time_start < self.manip_duration:
+            action = np.asarray(
+                interpolate_action(
+                    obs.time - self.time_start, self.manip_time, self.manip_action
+                )
+            )
+            return {}, action
 
         self.step_curr += 1
 

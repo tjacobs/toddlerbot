@@ -15,9 +15,9 @@ import joblib
 import matplotlib.pyplot as plt
 import numpy as np
 import numpy.typing as npt
+import wandb
 from tqdm import tqdm
 
-import wandb
 from toddlerbot.policies import BasePolicy
 from toddlerbot.sim import BaseSim, Obs
 from toddlerbot.sim.mujoco_sim import MuJoCoSim
@@ -41,7 +41,6 @@ def get_policy_class(policy_name: str) -> Type[BasePolicy]:
         f"toddlerbot.policies.{policy_name}_policy",
         f"toddlerbot.policies.{policy_name}",
     ]
-
     def first_upper(s: str) -> str:
         return s[0].upper() + s[1:] if s else s
 
