@@ -59,6 +59,21 @@ Assembly
         </div>
     </div>
 
+2.0 Interactive Assembly Manual
+-----------------------------------
+Access through `this link <https://docs.tnkr.ai/Stanford%20University>`_.
+
+.. raw:: html
+
+   <div style="display: flex; gap: 20px; justify-content: center; align-items: center; margin-top: 20px;">
+       <div style="flex: 1;">
+           <video width="100%" height="400" controls>
+               <source src="../_static/manual.mp4" type="video/mp4">
+               Your browser does not support the video tag.
+           </video>
+       </div>
+   </div>
+
 
 Before you begin, rest assured that building a humanoid from scratch is entirely feasible, even if you have little experience with robotics. 
 In that case, you'll learn a lot throughout the process! In fact, two CS majors have already successfully built ToddlerBot from scratch.
