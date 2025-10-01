@@ -12,7 +12,10 @@ import numpy.typing as npt
 from scipy.spatial.transform import Rotation as R
 
 from toddlerbot.actuation import dynamixel_cpp
-from toddlerbot.sensing.IMU import ThreadedIMU
+try:
+    from toddlerbot.sensing.IMU import ThreadedIMU
+except:
+    print("IMU not found")
 from toddlerbot.sim import BaseSim, Obs
 from toddlerbot.sim.robot import Robot
 
