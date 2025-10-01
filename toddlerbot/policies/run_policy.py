@@ -539,9 +539,6 @@ def main(args=None):
     # Common extras
     if hasattr(args, "path") and args.path:
         kwargs["path"] = args.path
-    else: 
-        print("No --path param provided, please provide a path to the directory that contains the model_best.onnx file...")
-        return 1
     if hasattr(args, "ip") and args.ip:
         kwargs["ip"] = args.ip
         sync_time(args.ip)
