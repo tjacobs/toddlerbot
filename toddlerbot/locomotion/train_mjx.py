@@ -795,6 +795,7 @@ def train(
         defined_metrics = ["env_step"]
     except Exception as e:
         print(f"Error with wandb: {e}. \n\nUpdate locomotion/ppo_config.py, wandb_entity with your wandb username, and wandb_project with your project name.")
+        defined_metrics = None
 
     domain_randomize_fn = None
     if env.add_domain_rand:
@@ -868,7 +869,7 @@ def train(
                         metrics["loss/total"] = metrics.pop(key)
 
         # Log metrics to wandb
-        log_metrics(metrics, num_steps, defined_metrics)
+        if defined_metrics is not None: log_metrics(metrics, num_steps, defined_metrics)
 
     render_interval = train_cfg.num_timesteps // train_cfg.render_nums
     last_render_step = 0
