@@ -28,10 +28,9 @@ def load_wandb_policy(
     name: str, project="ToddlerBot", entity="toddlerbot"
 ) -> Dict[str, Any]:
     """Load a policy from WandB artifacts."""
-    root = os.path.join("", name)
+    root = os.path.join("ckpts", name)
     ckpt_path = os.path.join(root, "model_best.onnx")
     if not os.path.exists(ckpt_path):
-        print(f"File does not exist: {ckpt_path}, loading from wandb...")
         if wandb.run:
             run = wandb.run
         else:
