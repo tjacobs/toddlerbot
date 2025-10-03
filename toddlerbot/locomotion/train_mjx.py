@@ -276,7 +276,16 @@ def render_video(
             "RGBA", (final_video.w, final_video.h), (0, 0, 0, 0)
         )  # Transparent background
         draw = ImageDraw.Draw(img)
-        font = ImageFont.truetype("DejaVuSans-Bold.ttf", font_size)
+        try:
+            # Try to load the preferred font
+            font = ImageFont.truetype("DejaVuSans-Bold.ttf", font_size)
+        except (OSError, IOError):
+            try:
+                # Fallback to system default font
+                font = ImageFont.load_default()
+            except (OSError, IOError):
+                # Last resort: use default font
+                font = None
         draw.text((10, 10), text, font=font, fill="white")
         return img
 
